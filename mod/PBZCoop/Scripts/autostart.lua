@@ -88,7 +88,12 @@ return function(api)
         api.revive.set((settings.revive or "off"):lower() == "on")
     end
     local role = (settings.role or "off"):lower()
-    local modRole = ({ host = "host", guest = "client" })[role]
+    os.remove(modDir() .. "pads_watch.txt")
+    if role == "local" then
+        api.localcoop.start(tonumber(settings.joysticks) or 2)
+        return
+    end
+    local modRole =({ host = "host", guest = "client" })[role]
     if not modRole then
         log("PhantomPact.ini: Role = " .. tostring(settings.role) .. ", co-op is off.")
         return

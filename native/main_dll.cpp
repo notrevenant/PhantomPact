@@ -8,11 +8,15 @@
 //   net_start.txt   written by the mod: what to run (key=value lines), removed once taken
 // Everything else is the relay's usual files. Two copies of the game on one PC use the instN folder, as the Lua does.
 #include "relay.hpp"
+#include "pad_route.hpp"
 
 namespace {
 
 constexpr DWORD POLL_MS = 250;
 constexpr DWORD NATIVE_EVERY_MS = 2000;
+constexpr DWORD PADS_MS = 20;
+constexpr DWORD FREE_DELAY_MS = 250;
+constexpr DWORD FREE_CLICK_MS = 30;
 
 LONG started = 0;
 HMODULE self = nullptr;
@@ -29,6 +33,71 @@ void find_folders() {
     wchar_t instance[16];
     if (GetEnvironmentVariableW(L"PBZCOOP_INSTANCE", instance, 16) > 0 && _wtoi(instance) > 1)
         mod_dir += L"\\inst" + std::wstring(instance);
+}
+
+// In local co-op (pads_watch.txt exists) the joysticks' state goes to pads.txt, one line per XInput slot: "0" unplugged,
+// "1" plugged in, "2" with a button held. While the panel is open (pads_want.txt exists) that's faster, and the cursor,
+// left button, Escape and F4 go to mouse.txt: the panel lets go of the mouse, and then the game itself sees no input.
+// XInput is loaded here, not linked, so a PC without it still runs.
+bool down(int key) {
+    return (GetAsyncKeyState(key) & 0x8000) != 0;
+}
+
+// The game keeps the real cursor pinned to the screen's centre until a click lands, whatever the input mode: click once
+// for the player as the panel opens, on the panel's empty middle.
+void free_cursor() {
+    DWORD process = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &process);
+    if (process != GetCurrentProcessId()) return;
+    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+    Sleep(FREE_CLICK_MS);
+    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+}
+
+DWORD WINAPI pads_thread(void*) {
+    struct State { DWORD packet; WORD buttons; BYTE left, right; SHORT lx, ly, rx, ry; };
+    using GetState = DWORD(WINAPI*)(DWORD, State*);
+    HMODULE lib = LoadLibraryW(L"xinput1_4.dll");
+    if (!lib) lib = LoadLibraryW(L"xinput9_1_0.dll");
+    auto get = lib ? reinterpret_cast<GetState>(GetProcAddress(lib, "XInputGetState")) : nullptr;
+    if (!get) return 0;
+    const std::wstring want = mod_dir + L"\\pads_want.txt";
+    const std::wstring watch = mod_dir + L"\\pads_watch.txt";
+    const std::wstring path = mod_dir + L"\\pads.txt";
+    bool was_open = false;
+    while (true) {
+        const bool open = GetFileAttributesW(want.c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (open || GetFileAttributesW(watch.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            std::string text;
+            LONG pads = 0;
+            for (DWORD i = 0; i < 4; i++) {
+                State s{};
+                bool on = get(i, &s) == ERROR_SUCCESS;
+                pads += on ? 1 : 0;
+                text += !on ? "0\n" : ((s.buttons != 0 || s.left > 64 || s.right > 64) ? "2\n" : "1\n");
+            }
+            relay::write_atomic(path, text);
+            route::xinput_pads = pads;
+        }
+        if (open) {
+            if (!was_open) {
+                Sleep(FREE_DELAY_MS);
+                free_cursor();
+            }
+            ClipCursor(nullptr);
+            POINT cursor{};
+            HWND window = GetForegroundWindow();
+            if (GetCursorPos(&cursor) && window && ScreenToClient(window, &cursor))
+                relay::write_atomic(mod_dir + L"\\mouse.txt",
+                                    std::to_string(cursor.x) + " " + std::to_string(cursor.y) + " "
+                                        + (down(VK_LBUTTON) ? "1 " : "0 ") + (down(VK_ESCAPE) ? "1 " : "0 ")
+                                        + (down(VK_F4) ? "1\n" : "0\n"));
+            Sleep(PADS_MS);
+        } else {
+            Sleep(POLL_MS);
+        }
+        was_open = open;
+    }
 }
 
 DWORD WINAPI announce_thread(void*) {
@@ -82,6 +151,8 @@ extern "C" __declspec(dllexport) void* start_mod() {
         find_folders();
         CloseHandle(CreateThread(nullptr, 0, announce_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, watch_thread, nullptr, 0, nullptr));
+        CloseHandle(CreateThread(nullptr, 0, pads_thread, nullptr, 0, nullptr));
+        CloseHandle(CreateThread(nullptr, 0, route::watch, &mod_dir, 0, nullptr));
     }
     return nullptr;
 }

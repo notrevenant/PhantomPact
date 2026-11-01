@@ -6,7 +6,7 @@
 -- F8  spawn player 2: a second local player + a copy of player 1's character (F8-F11 need PBZCOOP_DEBUG=1)
 -- F9  remove player 2
 
-local VERSION = "1.4.1"
+local VERSION = "1.4.2"
 local TAG = "[PBZCoop] "
 if (os.getenv("PBZCOOP_INSTANCE") or "1") ~= "1" then
     TAG = "[PBZCoop#" .. os.getenv("PBZCOOP_INSTANCE") .. "] "
@@ -282,7 +282,12 @@ local function spawnPawnForPlayer2(pawnClass)
     if not valid(state.p2Pawn) then
         return
     end
+    -- CreatePlayer gives the new controller a Soul of its own at the map's start point: don't leave it standing there.
+    local startPawn = p2pc.Pawn
     p2pc:Possess(state.p2Pawn)
+    if valid(startPawn) then
+        startPawn:K2_DestroyActor()
+    end
     if OFFSET_GAMEPADS then
         log("Player 2 now controls it. Keyboard = player 1, first gamepad = player 2.")
     else
@@ -351,11 +356,11 @@ local function onGameThread(fn, name)
     end
 end
 
-RegisterKeyBind(Key.F6, onGameThread(dumpPlayer, "F6"))
-RegisterKeyBind(Key.F7, onGameThread(listNearby, "F7"))
 -- F8-F11 spawn test pawns into the world: developer builds only (PBZCOOP_DEBUG=1), so a player can't hit one by accident.
 local DEV_KEYS = os.getenv("PBZCOOP_DEBUG") == "1"
 if DEV_KEYS then
+    RegisterKeyBind(Key.F6, onGameThread(dumpPlayer, "F6"))
+    RegisterKeyBind(Key.F7, onGameThread(listNearby, "F7"))
     RegisterKeyBind(Key.F8, onGameThread(spawnPlayer2Clone, "F8"))
     RegisterKeyBind(Key.F9, onGameThread(removePlayer2, "F9"))
     RegisterKeyBind(Key.F10, onGameThread(createPlayer2Only, "F10"))
@@ -433,6 +438,14 @@ local api = {
     modDir = modDir,
     modRoot = modRoot,
     spawnBesidePlayer1 = spawnBesidePlayer1,
+    spawnPawnForPlayer2 = spawnPawnForPlayer2,
+    removePlayer2 = removePlayer2,
+    setGamepadOffset = function(on)
+        OFFSET_GAMEPADS = on
+        applyGamepadOffset()
+    end,
+    onGameThread = onGameThread,
+    state = state,
     version = VERSION,
 }
 api.game = dofile(SCRIPT_DIR .. "pbz.lua")(api)
@@ -447,6 +460,8 @@ api.mapicon = dofile(SCRIPT_DIR .. "mapicon.lua")(api)
 api.revive = dofile(SCRIPT_DIR .. "revive.lua")(api)
 api.pvp = dofile(SCRIPT_DIR .. "pvp.lua")(api)
 api.scaling = dofile(SCRIPT_DIR .. "scaling.lua")(api)
+api.localcoop = dofile(SCRIPT_DIR .. "localcoop.lua")(api)
+api.panel = dofile(SCRIPT_DIR .. "panel.lua")(api)
 local net = coop.net
 
 -- Helpers for the "eval" command, so test snippets can reuse the mod's functions.
@@ -502,6 +517,8 @@ COMMANDS.moves = api.moves.command
 COMMANDS.puppets = api.puppets.command
 COMMANDS.hud = api.hud.command
 COMMANDS.revive = api.revive.command
+COMMANDS.localcoop = api.localcoop.command
+COMMANDS.panel = api.panel.command
 
 local function readCommandFile()
     local path = modDir() .. "cmd.txt"

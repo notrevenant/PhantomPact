@@ -24,6 +24,7 @@ return function(api)
 
     local game = { commands = {} }
     local bosses = {}             -- actor address -> true, from RegisterBossHPBar
+    local bossActors = {}         -- actor address -> the boss actor, for a second health bar (local co-op)
     local codexBoss = {}          -- class name (without _C) -> bIsBoss, filled lazily
     local syncing = false         -- true while the mod itself changes health, so OnDamage isn't re-reported
     local ghostBusyUntil = 0
@@ -218,6 +219,21 @@ return function(api)
         return next(bosses) ~= nil
     end
 
+    -- The bosses of the fights going on: live actors only.
+    function game.bossActors()
+        local out = {}
+        for addr, actor in pairs(bossActors) do
+            if bosses[addr] and valid(actor) and not game.isDead(actor) then
+                out[#out + 1] = actor
+            else
+                -- Gone without a word (the player's own death reloads the fight): the fight is over for us too.
+                bossActors[addr] = nil
+                bosses[addr] = nil
+            end
+        end
+        return out
+    end
+
     function game.resetBosses()
         bosses = {}
     end
@@ -346,12 +362,28 @@ return function(api)
             local boss = bossParam:get()
             if valid(boss) and not bosses[boss:GetAddress()] then
                 bosses[boss:GetAddress()] = true
+                bossActors[boss:GetAddress()] = boss
                 log("Boss fight: " .. boss:GetFName():ToString())
                 if api.coop and not showingRemoteBoss then
                     -- The same cross-PC id the snapshots use (sp:<SpawnerID> for spawner bosses).
                     game.refreshEnemyIds(true)
                     api.coop.sendEvent("B", game.enemyId(boss))
                 end
+            end
+        end)
+    end)
+    -- The bar goes away when the fight is over, or when the player's death reloads it with the boss still standing:
+    -- either way there is no boss fight any more.
+    pcall(function()
+        RegisterHook("/Script/ProjectPBZ.PBZHUDLayout:UnRegisterBossHPBar", function(_, bossParam)
+            local boss = bossParam:get()
+            if valid(boss) then
+                local addr = boss:GetAddress()
+                if bosses[addr] then
+                    log("Boss fight over: " .. boss:GetFName():ToString())
+                end
+                bosses[addr] = nil
+                bossActors[addr] = nil
             end
         end)
     end)
@@ -1200,6 +1232,8 @@ return function(api)
     -- In a cutscene: the game's own level-sequence manager. The manager is looked up again only every 2 s while
     -- it isn't found (this runs with every snapshot). (From appdoze's PR #5.)
     local seqManager, seqLookupAt = nil, -1e9
+    local seqOrphanSince = nil      -- since when the manager says "in sequence" with nothing playing
+    local SEQ_ORPHAN_S = 8.0
     function game.inCutscene()
         if not valid(seqManager) then
             local now = os.clock()
@@ -1213,7 +1247,21 @@ return function(api)
             end
         end
         local ok, playing = pcall(function() return seqManager:IsInSequence() end)
-        return ok and playing == true
+        if not (ok and playing == true) then
+            seqOrphanSince = nil
+            return false
+        end
+        -- A sequence that lost its player (seen once, after a sequence started by hand) leaves the flag up for
+        -- good. Without a player or a session for SEQ_ORPHAN_S, it doesn't count as a scene any more.
+        local okP, hasPlayer = pcall(function()
+            return valid(seqManager.ActiveSessionPlayer) or valid(seqManager.ActiveSessionProxy)
+        end)
+        if okP and hasPlayer then
+            seqOrphanSince = nil
+            return true
+        end
+        seqOrphanSince = seqOrphanSince or os.clock()
+        return os.clock() - seqOrphanSince < SEQ_ORPHAN_S
     end
 
     function game.mapName(contextActor)

@@ -60,6 +60,7 @@ namespace GameDriver { public static class Finder {
 function Get-GameWindow {
     $procs = Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue
     if ($script:TargetPid) { $procs = $procs | Where-Object { $_.Id -eq $script:TargetPid } }
+    else { $procs = $procs | Where-Object { $_.Path -like "$GameWin64*" } }
     foreach ($p in @($procs)) {
         $h = [GameDriver.Finder]::Unreal($p.Id)
         if ($h -ne [IntPtr]::Zero) { return $h }
@@ -134,7 +135,8 @@ function Save-GameScreenshot {
 # Kill the game, relaunch it through Steam and wait for its window.
 function Restart-Game {
     param([Parameter(Mandatory = $true)][int]$SteamAppId, [int]$TimeoutSec = 120)
-    Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Only this install's copies: another copy of the game (another folder) may be running for other tests.
+    Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$GameWin64*" } | Stop-Process -Force
     Start-Sleep -Seconds 4
     Start-Process "steam://rungameid/$SteamAppId"
     $deadline = (Get-Date).AddSeconds($TimeoutSec)

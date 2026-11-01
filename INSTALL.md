@@ -1,4 +1,4 @@
-# Phantom Pact 1.4.1: online co-op for Phantom Blade Zero
+# Phantom Pact 1.4.2: online co-op for Phantom Blade Zero
 
 Play the campaign with a friend: you see each other as a second Soul, fight the same enemies and bosses, and
 share loot, dust and bell rests. The host's world decides enemies, bosses and deaths; the guest's world follows.
@@ -8,6 +8,9 @@ Fan-made, unofficial. Each player needs their own copy of the game on Steam. No 
 **Found a bug?** Post in the Bugs tab on Nexus Mods or open an issue at
 https://github.com/yhsharaf/PhantomPact/issues, with what happened (host or guest, which area or boss) and your
 `ue4ss\UE4SS.log`.
+
+**Two players on one PC?** Set `Role = Local` instead of Host or Guest, plug in two pads, and read
+`docs/LOCAL_COOP.md` (in the GitHub repository) for player 2's controls. It is in testing.
 
 ## What you need (both players)
 

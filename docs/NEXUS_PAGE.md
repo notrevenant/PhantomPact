@@ -36,6 +36,11 @@ Shared dust: dust earned by either player goes to both
 Shared resting: rest at a bell and enemies respawn for both
 Your partner disappears while they’re down or on another map, and comes back when they return
 
+Local co-op (split screen, in testing): two players on one PC, one pad each or keyboard plus pad. Set Role = Local.
+Player 2 climbs, opens chests, rings bells, drinks from the gourd and fights on their own; enemies notice and fight a
+lone player 2; menus and the game's screens are shared; bosses get a health bar on player 2's half. F4 in the game
+opens the panel for screen layout and pads. Details: docs/LOCAL_COOP.md on GitHub.
+
 ## Requirements
 
 Phantom Blade Zero on Steam, for both players

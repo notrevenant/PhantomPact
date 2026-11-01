@@ -29,7 +29,7 @@ if (-not $vcvars) { throw 'Visual Studio with the C++ tools was not found.' }
 "Using $($vcvars.FullName)"
 
 $flags = '/nologo /std:c++20 /O2 /MT /EHsc /W3 /utf-8 /D_WINSOCK_DEPRECATED_NO_WARNINGS'
-$libs = 'ws2_32.lib bcrypt.lib winmm.lib'
+$libs = 'ws2_32.lib bcrypt.lib winmm.lib user32.lib'
 $script = @"
 @echo off
 call "$($vcvars.FullName)" >nul 2>nul

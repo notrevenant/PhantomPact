@@ -27,6 +27,9 @@ share loot and dust, and rest at bells together. The host's world leads, and you
   partner while you're down
 - Optional `Secret` that signs every packet; works over Tailscale, Hamachi, Radmin, ZeroTier, UU Accelerator, and
   Steam (beta)
+- Local co-op (`Role = Local`, in testing): two players on one PC in split screen, one pad each or keyboard plus
+  pad, with player 2 climbing, opening chests, ringing bells, drinking from the gourd and fighting on their own
+  ([docs/LOCAL_COOP.md](docs/LOCAL_COOP.md))
 
 ## Quick start
 
@@ -37,6 +40,8 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 4. Start the game and load your saves, the host first. Co-op starts by itself.
 
 Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
+
+For two players on one PC, set `Role = Local` instead and plug in two pads: see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
 
 ## Ground rules
 
@@ -49,7 +54,7 @@ Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta
 
 | Path | What it is |
 |---|---|
-| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `autostart.lua` (reads `PhantomPact.ini`, starts the relay, turns sync on), `main.lua` (loader, commands) |
+| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `localcoop.lua` (split screen: player 2's controls, interactions, enemies), `panel.lua` (F4 panel), `autostart.lua` (reads `PhantomPact.ini`, starts the relay, turns sync on), `main.lua` (loader, commands) |
 | [native/](native/) | The relay players run: C++, loaded by UE4SS as `dlls\main.dll` inside the game. Build with `tools\build-native.ps1` (Visual Studio 2022) |
 | [net/pbzcoop_net.py](net/pbzcoop_net.py) | The same relay in Python, with the same packets and files: the fallback if the DLL isn't running, plus echo and record/replay for testing |
 | [net/test_pbzcoop_net.py](net/test_pbzcoop_net.py) | Relay tests: `python -I net\test_pbzcoop_net.py`; set `PBZCOOP_NATIVE_RELAY` to `native\build\relay_cli.exe` to test the C++ relay, against itself or the Python one |
@@ -61,6 +66,8 @@ Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta
 | [tools/make-release.ps1](tools/make-release.ps1) | Builds `dist\PhantomPact-<version>.zip` |
 | [docs/COOP_GUIDE.md](docs/COOP_GUIDE.md) | What syncs and how: protocol, enemy matching, tests and results |
 | [docs/RECON_NOTES.md](docs/RECON_NOTES.md) | Classes, functions and data tables found in the game |
+| [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md) | Local co-op: setup, player 2's controls, what the game hardwires to player 1 and how the mod bridges it |
+| [tools/localcoop/](tools/localcoop/) | Local co-op test tools: launcher, command runner, Lua probes for enemies and fight areas, soak |
 
 ## Credits
 

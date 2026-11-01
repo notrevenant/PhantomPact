@@ -6,6 +6,8 @@
 
 **发现问题?** 请到 Nexus Mods 的 Bugs 页面发帖,或在 https://github.com/yhsharaf/PhantomPact/issues 提交 Issue,写明发生了什么(房主还是客人、哪个区域或首领),并附上 `ue4ss\UE4SS.log`。
 
+**同一台电脑两个人玩?** 把 `Role` 改成 `Local`(不是 Host 或 Guest),插上两个手柄,读档后几秒钟第二个角色会出现在玩家 1 身边。玩家 2 的手柄:叉(A)攀爬和跳,圈(B)互动,十字键下喝葫芦,Options 打开菜单。游戏中按 F4 可以改分屏方式和手柄分配。此功能仍在测试中。
+
 ## 需要准备(双方都要)
 
 1. Steam 上的《影之刃零》。
