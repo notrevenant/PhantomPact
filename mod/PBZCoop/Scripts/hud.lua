@@ -88,7 +88,9 @@ return function(api)
         local ok, size = pcall(function() return w:GetDesiredSize() end)
         if ok and size and size.X and size.X > 1 and size.Y > 1 then
             pcall(function() w:SetRenderScale({ X = wantW / size.X, Y = wantH / size.Y }) end)
+            return true
         end
+        return false
     end
 
     local function show(w, on)
@@ -97,6 +99,8 @@ return function(api)
         end
     end
 
+    local forgetShown = nil         -- (set below)
+
     local function remove()
         for _, w in ipairs({ lineWidget, dotWidget }) do
             if valid(w) then
@@ -104,6 +108,7 @@ return function(api)
             end
         end
         lineWidget, dotWidget = nil, nil
+        forgetShown()
     end
 
     local function onScreen(w)
@@ -115,61 +120,99 @@ return function(api)
             and os.clock() - net.lastRemoteAt <= FRESH_S
     end
 
-    -- Degrees from where the camera faces to the partner, -180..180 (negative = to the left).
-    local function bearing(pc, from, to)
-        local camYaw = pc.PlayerCameraManager:GetCameraRotation().Yaw
-        local angle = math.deg(math.atan(to.Y - from.Y, to.X - from.X))
-        return (angle - camYaw + 540) % 360 - 180
+    -- What the widgets were last told: a call that wouldn't change anything isn't made. Only the dot moves from tick to tick;
+    -- this was 25 calls through UE4SS, 30 times a second.
+    local LAYOUT_S = 1.0            -- the window's size, and whether the widgets are still up, are looked at this often
+    local MOVED_PX = 0.5
+    local nextLayout = 0
+    local camera, dotX, dotY, dotTint, dotDim, width, centre
+    local shown = false
+
+    forgetShown = function()
+        shown, nextLayout = false, 0
     end
 
-    local function update()
-        local t = net.target
-        local otherMap = t and t.Map and net.localMap and t.Map ~= "?" and t.Map ~= net.localMap
-        if not (hud.on and fresh()) or otherMap then
-            show(lineWidget, false)
-            show(dotWidget, false)
-            return
+    local function setShown(on)
+        if on ~= shown then
+            shown = on
+            show(lineWidget, on)
+            show(dotWidget, on)
         end
-        local pc, pawn = api.getPlayer1()
-        if not (valid(pc) and valid(pawn)) then
-            return
+    end
+
+    -- The slow part. False: not ready, so it comes round again on the next tick.
+    local function layOut()
+        local pc = api.getPlayer1()
+        if not valid(pc) then
+            return false
         end
+        camera = pc.PlayerCameraManager
         if not onScreen(lineWidget) then
             lineWidget = nil
         end
         if not onScreen(dotWidget) then
             dotWidget = nil
         end
-        local size = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportSize(pc)
-        local scale = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportScale(pc)
+        local wll = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary")
+        local size = wll:GetViewportSize(pc)
+        local scale = wll:GetViewportScale(pc)
         if not (size and size.X and size.X > 0 and scale and scale > 0) then
-            return
+            return false
         end
         -- Viewport positions are in DPI-scaled units.
         local vw, vh = size.X / scale, size.Y / scale
-        local width = vw * LINE_WIDTH_FRAC
-        local cx, cy = vw / 2, vh * LINE_Y_FRAC
-        lineWidget = lineWidget or newImage("compass_line.png", width, width * LINE_ASPECT)
-        dotWidget = dotWidget or newImage("partner_dot.png", DOT_SIZE, DOT_SIZE)
+        width = vw * LINE_WIDTH_FRAC
+        centre, dotY = vw / 2, vh * LINE_Y_FRAC
         if not (lineWidget and dotWidget) then
+            lineWidget = lineWidget or newImage("compass_line.png", width, width * LINE_ASPECT)
+            dotWidget = dotWidget or newImage("partner_dot.png", DOT_SIZE, DOT_SIZE)
+            dotX, dotTint, dotDim, shown = nil, nil, nil, false
+        end
+        if not (lineWidget and dotWidget) then
+            return false
+        end
+        lineWidget:SetPositionInViewport({ X = centre, Y = dotY }, false)
+        -- (A widget has no size until a frame after it's made.)
+        return fit(lineWidget, width, width * LINE_ASPECT) and fit(dotWidget, DOT_SIZE, DOT_SIZE)
+    end
+
+    local function update()
+        local t = net.target
+        local otherMap = t and t.Map and net.localMap and t.Map ~= net.localMap
+        if not (hud.on and fresh()) or otherMap then
+            setShown(false)
             return
         end
-        local from = pawn:K2_GetActorLocation()
-        local to = (valid(net.ghost) and not net.ghostHidden) and net.ghost:K2_GetActorLocation() or t
-        local deg = bearing(pc, from, to)
-        local behind = math.abs(deg) > COMPASS_HALF_DEG
-        local x = cx + math.max(-1, math.min(1, deg / COMPASS_HALF_DEG)) * width / 2
-        lineWidget:SetPositionInViewport({ X = cx, Y = cy }, false)
-        dotWidget:SetPositionInViewport({ X = x, Y = cy }, false)
-        fit(lineWidget, width, width * LINE_ASPECT)
-        fit(dotWidget, DOT_SIZE, DOT_SIZE)
-        local down = net.partnerDowned or (t.MaxHp and t.MaxHp > 0 and t.Hp and t.Hp <= 0)
-        pcall(function()
-            dotWidget.Circle:SetColorAndOpacity(down and DOWN_TINT or NORMAL_TINT)
-            dotWidget:SetRenderOpacity(behind and 0.55 or 1.0)
-        end)
-        show(lineWidget, true)
-        show(dotWidget, true)
+        local now = os.clock()
+        if now >= nextLayout or not (valid(dotWidget) and valid(camera)) then
+            nextLayout = layOut() and now + LAYOUT_S or 0
+            if not (valid(dotWidget) and valid(camera)) then
+                return
+            end
+        end
+        local from = net.localLoc
+        if not from then
+            return
+        end
+        -- Degrees from where the camera faces to the partner, -180..180 (negative = to the left). t is where the ghost is
+        -- being steered: within centimetres of it, which a compass can't show.
+        local angle = math.deg(math.atan(t.Y - from.Y, t.X - from.X))
+        local deg = (angle - camera:GetCameraRotation().Yaw + 540) % 360 - 180
+        local x = centre + math.max(-1, math.min(1, deg / COMPASS_HALF_DEG)) * width / 2
+        if dotX == nil or math.abs(x - dotX) >= MOVED_PX then
+            dotX = x
+            dotWidget:SetPositionInViewport({ X = x, Y = dotY }, false)
+        end
+        local tint = (net.partnerDowned or (t.MaxHp and t.MaxHp > 0 and t.Hp and t.Hp <= 0)) and DOWN_TINT or NORMAL_TINT
+        local dim = math.abs(deg) > COMPASS_HALF_DEG and 0.55 or 1.0
+        if tint ~= dotTint or dim ~= dotDim then
+            dotTint, dotDim = tint, dim
+            pcall(function()
+                dotWidget.Circle:SetColorAndOpacity(tint)
+                dotWidget:SetRenderOpacity(dim)
+            end)
+        end
+        setShown(true)
     end
 
     coop.extraTicks.hud = function()

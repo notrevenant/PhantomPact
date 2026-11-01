@@ -59,9 +59,8 @@ return function(api)
             end
         end
         -- Far apart in the same area: one tip each time you drift apart.
-        local _, pawn = api.getPlayer1()
-        if valid(pawn) and t.Map ~= nil and t.Map == net.localMap then
-            local l = pawn:K2_GetActorLocation()
+        local l = net.localLoc
+        if l and t.Map ~= nil and t.Map == net.localMap then
             local d = math.sqrt((l.X - t.X) ^ 2 + (l.Y - t.Y) ^ 2)
             local far = d > FAR_CM
             if far and not partner.far then

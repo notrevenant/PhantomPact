@@ -1,8 +1,7 @@
 <#
 .SYNOPSIS
     Talks to the running PBZCoop mod: finds the game window, sends mod commands (cmd.txt) and reads the mod's lines
-    from the UE4SS log. Dot-source it. This is all the player scripts need; game-driver.ps1 adds the test-only
-    input and screenshot tools on top.
+    from the UE4SS log. Dot-source it; game-driver.ps1 does, and adds the input and screenshot tools on top.
 
 .EXAMPLE
     . .\tools\mod-link.ps1 -GameWin64 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam' -ProcessName 'PBZ'

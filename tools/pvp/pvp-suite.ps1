@@ -3,7 +3,7 @@
 . "$PSScriptRoot\..\game-driver.ps1" -GameWin64 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam' -ProcessName 'PBZ'
 $run = "$PSScriptRoot\pvp-run.ps1"
 $state = Get-Content "$PSScriptRoot\..\..\logs\selftest-last.json" -Raw | ConvertFrom-Json
-$inbox = 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam\ue4ss\Mods\PBZCoop\inst2\net_events_in.txt'
+$inbox = & "$PSScriptRoot\pvp-watch.ps1"
 $results = [ordered]@{}
 function Check([string]$name, [bool]$ok, [string]$detail) { $results[$name] = $ok; Write-Output ("{0}  {1}  {2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail) }
 $place = 'eval local pc,me=PBZ.getPlayer1() local g=PBZ.net.ghost local l=g:K2_GetActorLocation() local r=g:K2_GetActorRotation().Yaw local x,y=l.X+math.cos(math.rad(r))*150,l.Y+math.sin(math.rad(r))*150 me:K2_SetActorLocation({X=x,Y=y,Z=l.Z+5},false,{},true) me:K2_SetActorRotation({Pitch=0,Yaw=r+180,Roll=0},false) pc:SetControlRotation({Pitch=-10,Yaw=r+180,Roll=0}) PBZ.game.setHealth(me,850) PBZ.game.setPosture(me,300) return "placed"'

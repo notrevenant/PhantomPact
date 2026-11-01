@@ -12,13 +12,17 @@ return function(api)
     local net = coop.net
 
     local SNAP_CM = 1000          -- further than this the copy jumps there
-    local STOP_CM = 40            -- closer than this it stands
     local NUDGE_CM = 120          -- further than this it's also moved directly, in case walking can't keep up
-    local NUDGE_SHARE = 0.08      -- of the gap, per tick
+    local NUDGE_SHARE = 0.08      -- of the gap, per frame
     local LOCKED_CM = 250         -- a move's own motion plays out unless the copy is this far off
-    local MIN_SPEED, MAX_SPEED = 100, 900   -- cm/s
-    local SPEED_PER_CM = 3.0
-    local TURN_SHARE = 0.25       -- of the angle, per tick
+    local BUSY_CM = 40            -- during one, further than this it's pulled gently
+    local BUSY_PULL = 0.08        -- share of the gap, per frame
+    local PULL = 4.0              -- per second: speed added per cm off the host's position
+    local STILL = 30              -- cm/s; asked to move slower than this, it stands
+    local MAX_SPEED = 1400        -- cm/s
+    local AHEAD_S = 0.2           -- the host's position is carried forward at its speed, but not further than this
+    local TURN_SHARE = 0.25       -- of the angle, per turn
+    local TURN_EVERY_S = 0.05
     local BUSY_S = 0.8            -- after an attack starts, leave the copy's facing to the move
     local RESTART_S = 0.05        -- the same montage at an earlier position = played again
     local PASSIVE = { "Passive", "Locomotion", "SpaceState", "Stance", "Utilities" }
@@ -26,6 +30,7 @@ return function(api)
     local puppets = { attacks = 0, played = 0, failed = 0 }
     local byAddr = {}             -- guest: actor address -> { actor, name, target, busyUntil }
     local hostSeen = {}           -- host: enemy name -> { addr, pos } of the montage last sent
+    local hostAnim = {}           -- host: actor address -> its AnimInstance
 
     local function passive(name)
         for _, word in ipairs(PASSIVE) do
@@ -37,10 +42,14 @@ return function(api)
     end
 
     -- Host, once a snapshot for every living enemy it shares.
-    function puppets.watchHost(name, actor)
-        local ai = api.moves.animOf(actor)
-        if not ai then
-            return
+    function puppets.watchHost(name, actor, addr)
+        local ai = hostAnim[addr]
+        if not valid(ai) then
+            ai = api.moves.animOf(actor)
+            if not ai then
+                return
+            end
+            hostAnim[addr] = ai
         end
         local m = ai:GetCurrentActiveMontage()
         local s = hostSeen[name]
@@ -48,7 +57,7 @@ return function(api)
             hostSeen[name] = nil
             return
         end
-        local addr = m:GetAddress()
+        addr = m:GetAddress()
         local pos = ai:Montage_GetPosition(m) or 0
         if s == nil or addr ~= s.addr or pos < s.pos - RESTART_S then
             local ability = game.activeAbility(actor, passive)
@@ -72,6 +81,11 @@ return function(api)
             game.stopAI(actor)
         end
         p.target = target
+    end
+
+    -- It died: nothing steers it through its death.
+    function puppets.drop(actor)
+        byAddr[actor:GetAddress()] = nil
     end
 
     function puppets.release(addr)
@@ -127,10 +141,17 @@ return function(api)
         end
     end
 
-    local function steer(p)
+    -- The host's enemy is carried forward along its own speed from the last update, and the copy moves at that speed
+    -- plus a pull onto it, so a walking enemy glides without waiting for the next update.
+    local function steer(p, now, addr)
         local actor, t = p.actor, p.target
-        local cur = actor:K2_GetActorLocation()
-        local dx, dy, dz = t.X - cur.X, t.Y - cur.Y, t.Z - cur.Z
+        local x, y, z = game.where(actor, addr)
+        if x == nil then
+            return
+        end
+        local cur = { X = x, Y = y, Z = z }
+        local ahead = math.min(now - t.at, AHEAD_S)
+        local dx, dy, dz = t.X + t.VX * ahead - cur.X, t.Y + t.VY * ahead - cur.Y, t.Z - cur.Z
         local dist = math.sqrt(dx * dx + dy * dy)
         if dist > SNAP_CM or math.abs(dz) > SNAP_CM then
             actor:K2_SetActorLocationAndRotation({ X = t.X, Y = t.Y, Z = t.Z },
@@ -139,19 +160,25 @@ return function(api)
         end
         local busy = os.clock() < p.busyUntil
         if busy and dist < LOCKED_CM then
+            if dist > BUSY_CM then
+                actor:K2_SetActorLocation({ X = cur.X + dx * BUSY_PULL, Y = cur.Y + dy * BUSY_PULL, Z = cur.Z }, false, {}, true)
+            end
             return
         end
-        if not busy then
+        if not busy and now >= (p.turnAt or 0) then
+            p.turnAt = now + TURN_EVERY_S
             local yaw = actor:K2_GetActorRotation().Yaw
             local turn = (t.Yaw - yaw + 180) % 360 - 180
             if math.abs(turn) > 2 then
                 actor:K2_SetActorRotation({ Pitch = 0.0, Yaw = yaw + turn * TURN_SHARE, Roll = 0.0 }, false)
             end
         end
-        if dist > STOP_CM then
+        local vx, vy = t.VX + dx * PULL, t.VY + dy * PULL
+        local speed = math.sqrt(vx * vx + vy * vy)
+        if speed > STILL then
             local cmc = actor.CharacterMovement
-            cmc.MaxWalkSpeed = math.max(MIN_SPEED, math.min(MAX_SPEED, dist * SPEED_PER_CM))
-            actor:AddMovementInput({ X = dx / dist, Y = dy / dist, Z = 0.0 }, 1.0, false)
+            cmc.MaxWalkSpeed = math.min(MAX_SPEED, speed)
+            actor:AddMovementInput({ X = vx / speed, Y = vy / speed, Z = 0.0 }, 1.0, false)
             if dist > NUDGE_CM then
                 actor:K2_SetActorLocation({ X = cur.X + dx * NUDGE_SHARE, Y = cur.Y + dy * NUDGE_SHARE,
                     Z = cur.Z + dz * NUDGE_SHARE }, false, {}, true)
@@ -159,12 +186,13 @@ return function(api)
         end
     end
 
-    coop.extraTicks.puppets = function()
+    coop.frameTicks.puppets = function()
+        local now = api.link.now()
         for addr, p in pairs(byAddr) do
-            if not valid(p.actor) or game.isDead(p.actor) then
+            if not valid(p.actor) then
                 byAddr[addr] = nil
             elseif p.target then
-                steer(p)
+                steer(p, now, addr)
             end
         end
     end

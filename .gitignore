@@ -1,6 +1,6 @@
 # Class/object dumps from UE4SS are large and contain game data
 dumps/
-# Self-test runs (relay logs, state file)
+# Self-test runs (state file, the ini kept during a run)
 logs/
 # Release builds (tools\make-release.ps1)
 dist/
@@ -12,3 +12,6 @@ art/screenshots/*.png
 __pycache__/
 # C++ relay build output (tools/build-native.ps1)
 native/build/
+
+# Test bench: which copies are running right now (tools/netlab)
+tools/netlab/bench/dev-*.json

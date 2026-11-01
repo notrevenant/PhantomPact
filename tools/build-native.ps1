@@ -1,13 +1,17 @@
 <#
 .SYNOPSIS
-    Builds the C++ relay into native\build: main.dll (the mod ships it in PBZCoop\dlls) and relay_cli.exe (for
-    net\test_pbzcoop_net.py only, never shipped). Needs Visual Studio 2022 with the C++ tools. Static runtime (/MT), so
-    players need no Visual C++ redistributable.
+    Builds the C++ relay into native\build: main.dll (the mod ships it in PBZCoop\dlls) and relay_cli.exe (the relay's
+    tests and the bench in tools\netlab, never shipped). Needs Visual Studio 2022 with the C++ tools. Static runtime (/MT),
+    so players need no Visual C++ redistributable.
 
 .EXAMPLE
     .\tools\build-native.ps1
 #>
 $ErrorActionPreference = 'Stop'
+# One build at a time on this PC: several test runs may ask at once, and the compiler can't share its output files.
+$buildLock = New-Object System.Threading.Mutex($false, 'Global\PhantomPactBuild')
+# A build that ended while another waited hands the lock over as "abandoned": it's free all the same.
+try { [void]$buildLock.WaitOne() } catch [System.Threading.AbandonedMutexException] { }
 $root = Split-Path $PSScriptRoot -Parent
 $src = Join-Path $root 'native'
 $out = Join-Path $src 'build'

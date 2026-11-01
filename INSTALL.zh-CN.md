@@ -1,10 +1,10 @@
-# 幻影契约(Phantom Pact)1.4.1:《影之刃零》线上联机模组
+# 幻影契约(Phantom Pact)1.4.2:《影之刃零》线上联机模组
 
 和朋友一起玩主线:你们能看到彼此,对付同样的敌人和首领,共享战利品、尘和钟旁休息。敌人、首领和死亡以房主的世界为准,客人的世界跟随。
 
 粉丝制作,非官方。每位玩家都需要在 Steam 上拥有自己的游戏。不修改、不分发任何游戏文件。
 
-**发现问题?** 请到 Nexus Mods 的 Bugs 页面发帖,或在 https://github.com/yhsharaf/PhantomPact/issues 提交 Issue,写明发生了什么(房主还是客人、哪个区域或首领),并附上 `ue4ss\UE4SS.log`。
+**发现问题?** 请到 Nexus Mods 的 Bugs 页面发帖,或在 https://github.com/yhsharaf/PhantomPact/issues 提交 Issue。需要附上的内容见本指南最后的[“提交问题时要附上什么”](#提交问题时要附上什么)。
 
 **同一台电脑两个人玩?** 把 `Role` 改成 `Local`(不是 Host 或 Guest),插上两个手柄,读档后几秒钟第二个角色会出现在玩家 1 身边。玩家 2 的手柄:叉(A)攀爬和跳,圈(B)互动,十字键下喝葫芦,Options 打开菜单。游戏中按 F4 可以改分屏方式和手柄分配。此功能仍在测试中。
 
@@ -14,7 +14,9 @@
 2. Vercadi 制作的 **UE4SS for Phantom Blade Zero**(Nexus Mods),安装到 `PBZ\platform\steam`。
 3. 一款虚拟局域网工具,双方连到同一网络:**UU 加速器的联机功能**、Tailscale、Hamachi、Radmin 或 ZeroTier 都可以。
 
-不需要安装 Python:从 1.4 起,联机程序运行在游戏内部(`PBZCoop\dlls\main.dll`),源代码在 GitHub 仓库的 `native/` 目录。
+不需要安装 Python:联机程序运行在游戏内部(`PBZCoop\dlls\main.dll`),源代码在 GitHub 仓库的 `native/` 目录。
+
+**双方必须使用相同版本。** 1.4.2 换了新的连接方式,1.4.1 及更早的版本无法与它连接。
 
 ## 安装(双方都要)
 
@@ -24,23 +26,25 @@
    - **房主:** 把 `Role = Guest` 改成 `Role = Host`
    - **客人:** 把 `HostAddress` 设为房主在虚拟局域网工具里显示的 IP 地址
    - **使用 UU 加速器或 ZeroTier 时:** 房主还要设置 `AllowAnyAddress = On`。保留 `Connect = Tailscale` 即可,它只表示“通过 IP 连接”。
-4. 启动游戏并读取存档,房主先进。进入游戏世界后联机会自动开始。Windows 询问时,房主必须点击**允许**,让游戏通过防火墙。
+4. 启动游戏并读取存档,房主先进。进入游戏世界后联机会自动开始。第一次做房主时,Windows 会询问是否允许游戏使用网络,必须点击**允许**,让游戏通过防火墙。这个窗口可能出现在游戏后面,如果客人连不上,请按 Alt+Tab 查看。
 
 UE4SS 控制台会显示 `Phantom Pact Host: co-op on`(或 Guest),连接成功后 `ue4ss\Mods\PBZCoop\net_status.txt` 会显示 `connected=yes`。
 
-- **更新:** 把新版本解压覆盖旧版本,然后重新设置 `Role` 和 `HostAddress`。
+**也可以试试联机面板(测试中):** 在 `PhantomPact.ini` 里设置 `OnlinePanel = On`,然后在游戏中按 F4 打开面板,选择 Tailscale 或 Steam,然后点 Host(做房主)、Join(加入)或 Leave(离开),不需要重启游戏。面板会显示是否已连接以及延迟,并把你的选择保存到 `PhantomPact.ini`(Leave 会保存为 `Role = Off`)。通过 Tailscale 加入时,仍然要在 `HostAddress` 里填房主的地址,游戏运行时也可以填。`OnlinePanel = Off` 可以关闭 F4。`Role = Local` 时,F4 是本地双人的面板。
+
+- **更新:** 双方都要更新。把新版本解压覆盖旧版本,然后重新设置 `Role` 和 `HostAddress`。旧版本留在 `PBZCoop` 文件夹里的内容(`relay` 文件夹,以及 `net_in.txt`、`net_out.txt` 和 `net_events` 文件)已经不再使用,可以删除。
 - **单人游玩:** 设置 `Role = Off`。
 - **卸载:** 删除 `platform\steam\ue4ss\Mods\PBZCoop` 文件夹。
 
 ## 其他连接方式
 
-- **Steam:** 双方都设置 `Connect = Steam`,客人会加入正在做房主的 Steam 好友,不需要虚拟局域网。双方必须是 Steam 好友。客人的 `HostAddress` 留空(或填房主的 Steam 名称),不要填 IP 地址。
+- **Steam:** 双方都设置 `Connect = Steam`,客人会加入正在做房主的 Steam 好友,不需要虚拟局域网。双方必须是 Steam 好友。客人的 `HostAddress` 留空或填房主的 Steam 名称;填 IP 地址会被忽略。`SteamDirect = Off`(默认)交给 Steam 自己的设置,通常走 Valve 的中继:IP 不会暴露,但延迟更高。`On` 会尝试直连,这是最快的方式,但搭档的电脑可以看到你的 IP 地址。直连需要双方都设为 `On`。
 - **Secret(可选):** 在两台电脑的 `Secret =` 里填相同的密码,每个数据包都会被签名,网络上的其他人无法加入。使用 `AllowAnyAddress = On` 时建议设置。
 
 ## 屏幕显示
 
 - **搭档罗盘:** 屏幕顶部的线上有一枚银色印章,显示搭档的方向。用 `PartnerCompass = Off` 关闭。
-- **提示:** 搭档连接、掉线、倒下或走远时会有简短提示。
+- **提示:** 搭档连接、掉线、倒下或走远时会有简短提示;遇到问题时也会提示,例如房主没有回应、`Secret` 被拒绝、双方版本或设置不同、延迟过高。
 - **死亡时:** 几秒后镜头会跟随搭档,直到你重生。
 
 ## 联机难度
@@ -70,7 +74,57 @@ PvP 暂不支持处决(架势被破只会硬直)。
 ## 常见问题
 
 - **没有 “co-op on” 这一行:** 检查 `PhantomPact.ini`(Role,客人还要检查 HostAddress)。UE4SS 日志会写明缺少什么。
-- **“dlls\main.dll isn't running”:** 杀毒软件可能删除了它。重新解压压缩包并允许该文件,然后重启游戏。如果装有 Python 3,模组会改用 Python。
-- **模组文件夹里出现 `relay_error.txt`:** 连接无法启动,文件里写明了原因(例如端口被占用)。提交问题时请附上它。
-- **`connected=no`:** 双方都连上虚拟局域网了吗?客人的 `HostAddress` 是否正确?Windows 防火墙必须允许游戏使用专用网络(房主第一次游玩时 Windows 会询问,请点击允许)。如果当时点了取消,请在 Windows 防火墙设置里允许 `PBZ.exe`。
+- **“dlls\main.dll isn't running”:** 杀毒软件可能删除了它。重新解压压缩包并允许该文件,然后重启游戏。没有它就无法线上联机。
+- **模组文件夹里出现 `relay_error.txt`,或游戏提示 “co-op couldn't start”:** 连接无法启动,信息里写明了原因(例如端口被占用)。提交问题时请附上它。
+- **`connected=no`,或者感觉卡顿:** 见下面的“连接问题”。
 - **完全没有 `[PBZCoop] Loaded` 这一行:** UE4SS 没有安装在 `PBZ\platform\steam`,或模组文件夹不在 `platform\steam\ue4ss\Mods\PBZCoop`。
+
+## 连接问题
+
+游戏运行时,`ue4ss\Mods\PBZCoop\net_status.txt` 每秒更新一次。它只有很长的一行,用记事本打开即可;想看最新数字,请重新打开一次。有用的部分:
+
+| 字段 | 含义 |
+|---|---|
+| `connected` | 最近 3 秒内收到过搭档的数据时为 `yes` |
+| `peer` | 搭档的地址。房主这边显示 `-` 表示还没有收到客人的数据 |
+| `via` | 连接方式:`udp`(通过 IP 连接,即 Tailscale 或其他虚拟局域网)或 `steam` |
+| `route` | 仅 Steam:`direct`(直连)或 `relay`(经 Valve 服务器中继)。通过 IP 连接时为 `-`,见下文“直连还是中继” |
+| `rtt_ms` | 延迟(ping,一来一回,毫秒)。持续高于 250 时游戏会提示 |
+| `route_ping_ms` | 仅 Steam:Steam 自己测得的这条线路的延迟 |
+| `jitter_ms` | 抖动:数据包比近期最快的一次晚到多少毫秒。延迟低而抖动高,通常是 Wi-Fi 造成的 |
+| `delay_ms` | 为了让搭档动作平滑,画面上的搭档比实际晚多少毫秒。随抖动变化,最多约 220 |
+| `loss_pct` | 最近一秒的丢包率(百分比) |
+| `partner_version` | 搭档的版本。显示 `1.4.1-or-older` 或 `other-protocol` 时,说明有一方需要更新 |
+| `mismatch` | 双方不一致的设置(`-` 表示没有) |
+| `filtered` | 因地址不符被拒绝的数据包。房主这边数字在增长时,请看上文的 `AllowAnyAddress` |
+| `rejected` | 被 `Secret` 拒绝的数据包。数字在增长时,说明双方的 `Secret` 不同,或两台电脑的时钟相差超过 2 分钟 |
+| `stopped` | 连接没有运行时为 `yes`:你点了 Leave,或者启动失败,此时 `error` 会写明原因 |
+
+作为参考:在 100 毫秒延迟、20 毫秒抖动、2% 丢包的情况下,测试仍然流畅。这是在一台电脑上运行两份游戏、用模拟的差网络测出来的,不是真实网络。
+
+**`connected=no`。** 请按顺序检查:
+
+1. 双方都连上了同一个虚拟局域网吗?客人的 `HostAddress` 是房主的 IP 吗?
+2. 使用 Tailscale 时,客人在 PowerShell 里运行 `tailscale ping 100.x.y.z`(换成房主的 IP)。没有回复说明 Tailscale 本身没有连通两台电脑,请先解决这个问题。
+3. 有回复但仍然是 `connected=no`:多半是房主电脑上的 Windows 防火墙挡住了,因为 `tailscale ping` 不经过防火墙。见下文。
+
+**Windows 防火墙。** 联机程序是游戏的一部分,所以防火墙询问的是游戏(`PBZ.exe`),不是 Python。游戏第一次打开端口时才会询问,也就是在房主的电脑上,窗口可能出现在游戏后面。请点击允许,并勾选专用网络(Tailscale 属于专用网络;如果你的虚拟局域网在 Windows 里显示为公用网络,也要勾选公用)。如果当时点了取消,请打开 Windows 安全中心 > 防火墙和网络保护 > 允许应用通过防火墙 > 更改设置,勾选 PBZ。列表里没有的话,用“允许其他应用”选择游戏文件夹里的 `platform\steam\PBZ.exe`。
+
+**直连还是中继。** 使用 Steam 时看 `route`:如果一直是 `relay`,请确认双方都设置了 `SteamDirect = On`,并且路由器允许直连。使用 Tailscale 时 `route` 一直是 `-`,请用 `tailscale ping 100.x.y.z` 查看:
+
+- `pong from ... via 203.0.113.5:41641 in 12ms`:直连,这是最好的情况。一旦直连成功,命令会自动停止。
+- `pong from ... via DERP(fra) in 80ms`:经 Tailscale 的服务器中继。Tailscale 寻找直连路径时,最初几次回复常常是这样。
+- 最后显示 `direct connection not established`:一直在走中继,延迟和抖动都会更高。请关闭双方电脑上的其他 VPN,在路由器上打开 UPnP,或把 UDP 端口 41641(Tailscale 自己的端口,不是游戏的)转发到其中一台电脑。手机热点、或运营商让多个用户共用一个公网地址时,可能始终无法直连。都不行的话,换一款虚拟局域网工具试试。
+
+**Wi-Fi 还是网线。** 抖动、丢包和短暂卡顿,最常见的原因是 Wi-Fi。如果 `jitter_ms` 忽高忽低,或者 `loss_pct` 不是 0,请插上网线(最好双方都插)再比较。同时停掉同一网络上的大文件下载和视频。
+
+## 提交问题时要附上什么
+
+最好双方都提供。请在问题发生后、重启游戏或重新连接之前收集,因为这些文件之后会重新开始:
+
+- `ue4ss\UE4SS.log`
+- `ue4ss\Mods\PBZCoop\net_status.txt` 和 `relay_log.txt`;如果有 `relay_error.txt`,也请附上
+- 使用 Tailscale 时,`tailscale ping` 的输出
+- 房主还是客人、哪个区域或首领、发生了什么,以及用的是 Wi-Fi 还是网线
+
+`net_status.txt` 和 `relay_log.txt` 里有搭档的地址。你的 `Secret` 只在 `PhantomPact.ini` 里:不要把带着 `Secret` 的这个文件发出来。

@@ -107,8 +107,11 @@ return function(api)
             return
         end
         ticks = ticks + 1
+        if not net.enabled or ticks % OPEN_TICKS ~= 0 then
+            return
+        end
         local isOpen = valid(openMap) and openMap:IsVisible()
-        if not net.enabled or ticks % (isOpen and OPEN_TICKS or CLOSED_TICKS) ~= 0 then
+        if not isOpen and ticks % CLOSED_TICKS ~= 0 then
             return
         end
         local ok, err = pcall(function()

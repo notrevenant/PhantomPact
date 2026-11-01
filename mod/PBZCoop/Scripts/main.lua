@@ -34,11 +34,15 @@ end
 
 -- Safe for anything: a stale reference handed back mid-respawn once had an IsValid that wasn't a function
 -- ("attempt to call a string value"), which broke that tick's whole snapshot read.
+local function isValid(obj)
+    return obj:IsValid()
+end
+
 local function valid(obj)
     if obj == nil or type(obj) == "string" or type(obj) == "number" or type(obj) == "boolean" then
         return false
     end
-    local ok, result = pcall(function() return obj:IsValid() end)
+    local ok, result = pcall(isValid, obj)   -- (no closure: this runs hundreds of times a second)
     return ok and result == true
 end
 
@@ -54,22 +58,45 @@ local function applyGamepadOffset()
 end
 
 -- Player 1's controller is the one with ControllerId 0, not just the first one found,
--- because after F8 there are two PlayerControllers.
+-- because after F8 there are two PlayerControllers. Kept, because FindFirstOf takes about a millisecond and this runs
+-- many times a frame: it's looked up again when it goes (a map change), and asked of the game every few seconds to be
+-- sure. Only a controller that's gone needs the search: that search was a 10 ms frame every 5 s, in whichever stage came
+-- first.
+local PC_RECHECK_S = 5.0
+local PC_SEARCH_S = 0.25          -- while there's no controller at all (loading): searched this often at most
+local player1Pc, pcCheckedAt, pcSearchedAt = nil, -1e9, -1e9
+
 local function getPlayer1()
-    local gs = gameplayStatics()
-    local anyPc = FindFirstOf("PlayerController")
-    if not valid(gs) or not valid(anyPc) then
-        return nil, nil
+    local now = os.clock()
+    if not valid(player1Pc) then
+        player1Pc = nil
+        if now - pcSearchedAt < PC_SEARCH_S then
+            return nil, nil
+        end
+        pcSearchedAt, pcCheckedAt = now, now
+        local gs = gameplayStatics()
+        local anyPc = FindFirstOf("PlayerController")
+        if not valid(gs) or not valid(anyPc) then
+            return nil, nil
+        end
+        local pc = gs:GetPlayerController(anyPc, 0)
+        if not valid(pc) then
+            return nil, nil
+        end
+        player1Pc = pc
+    elseif now - pcCheckedAt >= PC_RECHECK_S then
+        pcCheckedAt = now
+        local gs = gameplayStatics()
+        local pc = valid(gs) and gs:GetPlayerController(player1Pc, 0)
+        if valid(pc) then
+            player1Pc = pc
+        end
     end
-    local pc = gs:GetPlayerController(anyPc, 0)
-    if not valid(pc) then
-        return nil, nil
-    end
-    local pawn = pc.Pawn
+    local pawn = player1Pc.Pawn
     if not valid(pawn) then
-        return pc, nil
+        return player1Pc, nil
     end
-    return pc, pawn
+    return player1Pc, pawn
 end
 
 local function fmtVec(v)
@@ -428,7 +455,30 @@ local function modDir()
     return modRoot() .. "inst" .. INSTANCE .. "/"
 end
 
+-- Direct calls into main.dll (native/lua_link.hpp). Nil if it can't be reached: online co-op then stays off and says why.
+local function openLink()
+    local dll = (modRoot() .. "dlls/main.dll"):gsub("/", "\\")
+    local link = {}
+    for _, name in ipairs({ "now", "wall", "state", "event", "quick", "enemy", "partner", "events", "enemies", "status", "map", "reset", "stop" }) do
+        local fn, err = package.loadlib(dll, "pp_" .. name)
+        if not fn then
+            log("Can't reach main.dll: " .. tostring(err))
+            return nil
+        end
+        link[name] = fn
+    end
+    for _, name in ipairs({ "layout", "read", "pointer" }) do      -- only ever faster: without them, reads go through UE4SS
+        link[name] = package.loadlib(dll, "pp_" .. name)
+    end
+    if not link.now() then
+        log("Can't reach main.dll: this UE4SS has no Lua calls for it.")
+        return nil
+    end
+    return link
+end
+
 local api = {
+    link = openLink(),
     log = log,
     valid = valid,
     gs = gameplayStatics,
@@ -462,6 +512,7 @@ api.pvp = dofile(SCRIPT_DIR .. "pvp.lua")(api)
 api.scaling = dofile(SCRIPT_DIR .. "scaling.lua")(api)
 api.localcoop = dofile(SCRIPT_DIR .. "localcoop.lua")(api)
 api.panel = dofile(SCRIPT_DIR .. "panel.lua")(api)
+api.onlinepanel = dofile(SCRIPT_DIR .. "onlinepanel.lua")(api)
 local net = coop.net
 
 -- Helpers for the "eval" command, so test snippets can reuse the mod's functions.
@@ -480,6 +531,7 @@ PBZ = {
     net = net,
     coop = coop,
     game = api.game,
+    link = api.link,
 }
 
 -- Command file: lets a developer drive tests from outside the game. Write one command per line
@@ -519,6 +571,7 @@ COMMANDS.hud = api.hud.command
 COMMANDS.revive = api.revive.command
 COMMANDS.localcoop = api.localcoop.command
 COMMANDS.panel = api.panel.command
+COMMANDS.onlinepanel = api.onlinepanel.command
 
 local function readCommandFile()
     local path = modDir() .. "cmd.txt"

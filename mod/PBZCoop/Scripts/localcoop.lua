@@ -1279,6 +1279,8 @@ return function(api)
         end
     end
 
+    localcoop.bellMenuUp, localcoop.screenUp = bellMenuUp, screenUp     -- the online panel keeps out of the game's screens
+
     -- The controller the keyboard and mouse reach.
     function localcoop.keyboardController()
         local pc = getPlayer1()

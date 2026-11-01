@@ -1,5 +1,6 @@
-# Starts two PBZ copies (selftest), gets both into gameplay, lines them up 4 m apart facing each other and turns
-# sync on (host/client). Leaves everything running for interactive PvP recon via Send-ModCommand.
+# Starts two PBZ copies (selftest, whose PhantomPact.ini files make them host and client) and gets both into gameplay,
+# where the mods turn sync on by themselves. Waits for the link, then leaves everything running for interactive PvP
+# recon via Send-ModCommand.
 $ErrorActionPreference = 'Stop'
 $tools = "$PSScriptRoot\.."
 $GameWin64 = 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam'
@@ -8,8 +9,6 @@ Get-Process PBZ -ErrorAction SilentlyContinue | Where-Object SessionId -eq (Get-
 Start-Sleep 3
 & (Join-Path $tools 'install-mod.ps1') -GameWin64 $GameWin64 | Out-Null
 $modRoot = Join-Path $GameWin64 'ue4ss\Mods\PBZCoop'
-Set-Content (Join-Path $modRoot 'PhantomPact.ini') 'Role = Off' -Encoding ascii
-Remove-Item (Join-Path $modRoot 'inst2\PhantomPact.ini') -ErrorAction SilentlyContinue
 & (Join-Path $tools 'pbz-selftest.ps1')
 $state = Get-Content "$PSScriptRoot\..\..\logs\selftest-last.json" -Raw | ConvertFrom-Json
 $hostPid, $clientPid = @($state.Games)[0], @($state.Games)[1]
@@ -32,5 +31,10 @@ foreach ($i in 1, 2) {
     }
     "copy $i in gameplay: $ok, has a character: $pawn"
 }
-Use 1; Send-ModCommand 'neton host'; Start-Sleep 2; Use 2; Send-ModCommand 'neton client'; Start-Sleep 4
+$deadline = (Get-Date).AddSeconds(30)
+do {
+    Start-Sleep 1
+    $linked = @($modRoot, (Join-Path $modRoot 'inst2') | Where-Object { (Get-Content (Join-Path $_ 'net_status.txt') -Raw -ErrorAction SilentlyContinue) -match 'connected=yes' }).Count -eq 2
+} until ($linked -or (Get-Date) -gt $deadline)
+"linked: $linked"
 "hostPid=$hostPid clientPid=$clientPid"

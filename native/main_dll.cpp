@@ -1,13 +1,12 @@
 // main.dll: UE4SS loads it from PBZCoop\dlls because the folder has that file (a C++ mod). It uses nothing from UE4SS:
 // start_mod returns null, so UE4SS treats the mod as not started and never calls into it, and a UE4SS update can't
 // break it unless the loader itself changes. (Measured on Vercadi's 3.0.1 build: start_mod is called twice and
-// uninstall_mod never, so it starts once and stops by the heartbeat.)
+// uninstall_mod never, so it starts once and ends with the game.)
 //
-// The Lua side (autostart.lua) can't call in here, so the two talk through files in the mod folder:
-//   net_native.txt  written here every few seconds: tells the mod the built-in relay is available
-//   net_start.txt   written by the mod: what to run (key=value lines), removed once taken
-// Everything else is the relay's usual files. Two copies of the game on one PC use the instN folder, as the Lua does.
+// The mod starts the relay through net_start.txt in the mod folder (what to run, key=value lines, removed once taken), and
+// from then on calls straight in here (lua_link.hpp). Two copies of the game on one PC use the instN folder, as the Lua does.
 #include "relay.hpp"
+#include "lua_link.hpp"
 #include "pad_route.hpp"
 
 namespace {
@@ -37,7 +36,8 @@ void find_folders() {
 
 // In local co-op (pads_watch.txt exists) the joysticks' state goes to pads.txt, one line per XInput slot: "0" unplugged,
 // "1" plugged in, "2" with a button held. While the panel is open (pads_want.txt exists) that's faster, and the cursor,
-// left button, Escape and F4 go to mouse.txt: the panel lets go of the mouse, and then the game itself sees no input.
+// left button, Escape, F4 and whether this game has the focus go to mouse.txt: the panel lets go of the mouse, and then the
+// game itself sees no input.
 // XInput is loaded here, not linked, so a PC without it still runs.
 bool down(int key) {
     return (GetAsyncKeyState(key) & 0x8000) != 0;
@@ -87,11 +87,14 @@ DWORD WINAPI pads_thread(void*) {
             ClipCursor(nullptr);
             POINT cursor{};
             HWND window = GetForegroundWindow();
+            DWORD owner = 0;
+            GetWindowThreadProcessId(window, &owner);
             if (GetCursorPos(&cursor) && window && ScreenToClient(window, &cursor))
                 relay::write_atomic(mod_dir + L"\\mouse.txt",
                                     std::to_string(cursor.x) + " " + std::to_string(cursor.y) + " "
                                         + (down(VK_LBUTTON) ? "1 " : "0 ") + (down(VK_ESCAPE) ? "1 " : "0 ")
-                                        + (down(VK_F4) ? "1\n" : "0\n"));
+                                        + (down(VK_F4) ? "1 " : "0 ")
+                                        + (owner == GetCurrentProcessId() ? "1\n" : "0\n"));   // this game has the focus
             Sleep(PADS_MS);
         } else {
             Sleep(POLL_MS);
@@ -100,17 +103,11 @@ DWORD WINAPI pads_thread(void*) {
     }
 }
 
-DWORD WINAPI announce_thread(void*) {
-    const std::wstring path = mod_dir + L"\\net_native.txt";
-    while (true) {
-        relay::write_atomic(path, "ready " + std::to_string(static_cast<long long>(std::time(nullptr))) + "\n");
-        Sleep(NATIVE_EVERY_MS);
-    }
-}
-
 void run_from(const std::wstring& start_path) {
+    relay::mail.stop = false;   // first: the mod removes the start file, then asks to stop, so neither order can be missed
     relay::Ini start = relay::read_ini(start_path);
     DeleteFileW(start_path.c_str());
+    if (start["role"].empty()) return;
     DeleteFileW((mod_dir + L"\\relay_error.txt").c_str());
     const std::wstring log_path = mod_dir + L"\\relay_log.txt";
     relay::write_atomic(log_path, "");
@@ -124,7 +121,6 @@ void run_from(const std::wstring& start_path) {
     o.port = std::atoi(start["port"].c_str());
     if (o.port <= 0 || o.port > 65535) o.port = 47800;
     o.ini = mod_dir + L"\\PhantomPact.ini";
-    o.alive_file = mod_dir + L"\\net_alive.txt";
     relay::run(o, [&](const std::string& line) {
         if (line.rfind("role=", 0) != 0) relay::append_lines(log_path, {line});   // not the status, once a second
     });
@@ -149,7 +145,6 @@ DWORD WINAPI watch_thread(void*) {
 extern "C" __declspec(dllexport) void* start_mod() {
     if (InterlockedExchange(&started, 1) == 0) {
         find_folders();
-        CloseHandle(CreateThread(nullptr, 0, announce_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, watch_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, pads_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, route::watch, &mod_dir, 0, nullptr));

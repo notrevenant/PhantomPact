@@ -32,7 +32,7 @@ Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 # Without this, window coordinates come back scaled on high-DPI screens and captures are misaligned.
 [GameDriver.Native]::SetProcessDPIAware() | Out-Null
 
-# Window lookup, mod commands and log reading (the part the player scripts use on their own).
+# Window lookup, mod commands and log reading.
 . (Join-Path $PSScriptRoot 'mod-link.ps1') -GameWin64 $GameWin64 -ProcessName $ProcessName
 
 # MainWindowHandle can be the UE4SS console: keys then went nowhere and the copy sat at its menu. Ask for the game's own.

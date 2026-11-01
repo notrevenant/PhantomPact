@@ -1,12 +1,11 @@
 -- The partner's moves on their ghost, as animation montages. (From appdoze's PR #5.)
 --
 -- Whatever montage your character plays (attacks, guard stance, deflects, executions, weapon and Phantom Edge
--- skills, item use...) is sent as "U <montage path> <position>", and the partner's ghost plays the same montage
--- from that point (plus half the ping) with its AnimInstance's own Montage_Play.
+-- skills, item use, ladders and wall runs...) is sent as "U <montage path> <position>", and the partner's ghost plays
+-- the same montage from that point (plus half the ping) with its AnimInstance's own Montage_Play. "U - 0" says it ended.
 --
 -- Montages show what replaying abilities (M events) couldn't: a ghost often can't activate an ability (guard
--- stance, executions, some weapon skills). M is still sent for older partners and used until the first montage
--- arrives. PvP keeps abilities: there the ghost's swings must land real hits.
+-- stance, executions, some weapon skills). PvP keeps abilities: there the ghost's swings must land real hits.
 --
 -- Checked here (review of PR #5): only montage folders are accepted, the loaded object must really be an
 -- AnimMontage, and new loads are capped per minute, so a partner can't make this game load any asset; the ghost
@@ -21,6 +20,7 @@ return function(api)
     local ALLOWED_ROOTS = { "^/PBZCombatAsset/", "^/Game/", "^/HuaShira/" }
     local MAX_NEW_LOADS_PER_MIN = 30
     local RESTART_S = 0.05          -- the same montage at an earlier position = played again
+    local STOP_BLEND_S = 0.25       -- the ghost leaves a montage the partner has left over this long
 
     local moves = { sent = 0, played = 0, failed = 0, refused = 0, partnerSends = false }
     local last, lastPos = nil, 0
@@ -58,15 +58,29 @@ return function(api)
 
     moves.animOf, moves.pathOf, moves.allowedPath = animOf, pathOf, allowedPath
 
+    local ANIM_CHECK_S = 1.0
+    local watchedBody, watchedAi, animCheckAt = nil, nil, 0
+
     -- Sender, every tick: a new montage, or the same one started again, goes to the partner.
     local function watch()
-        local _, pawn = api.getPlayer1()
-        local ai = valid(pawn) and animOf(pawn)
+        local pawn = coop.localPawn()
+        if pawn == nil then
+            return
+        end
+        -- Asked for again now and then: it's three calls more each time, and a tick of this comes every other frame.
+        local now = os.clock()
+        if pawn ~= watchedBody or now >= animCheckAt or not valid(watchedAi) then
+            watchedBody, watchedAi, animCheckAt = pawn, animOf(pawn), now + ANIM_CHECK_S
+        end
+        local ai = watchedAi
         if not ai then
             return
         end
         local m = ai:GetCurrentActiveMontage()
         if not valid(m) then
+            if last then
+                coop.sendEvent("U", "-", "0")     -- over or cut short: the ghost's copy mustn't play on (some loop)
+            end
             last = nil
             return
         end
@@ -74,6 +88,9 @@ return function(api)
         local pos = ai:Montage_GetPosition(m) or 0
         if addr ~= last or pos < lastPos - RESTART_S then
             local path = pathOf(m)
+            if game.noteLocalMove then
+                game.noteLocalMove()
+            end
             if api.revive then
                 api.revive.onLocalMontage(m:GetFName():ToString())
             end
@@ -83,6 +100,19 @@ return function(api)
             end
         end
         last, lastPos = addr, pos
+    end
+
+    -- Capped, so a flood of different paths can't stall the game with loads.
+    local function countLoad()
+        local now = os.clock()
+        if now - loadsWindow >= 60 then
+            loads, loadsWindow = 0, now
+        end
+        if loads >= MAX_NEW_LOADS_PER_MIN then
+            return false
+        end
+        loads = loads + 1
+        return true
     end
 
     local function montage(path)
@@ -95,16 +125,10 @@ return function(api)
         end
         m = StaticFindObject(path)
         if not valid(m) and type(LoadAsset) == "function" then
-            -- Moves of a weapon the local player doesn't carry aren't in memory yet. Capped, so a flood of
-            -- different paths can't stall the game with loads.
-            local now = os.clock()
-            if now - loadsWindow >= 60 then
-                loads, loadsWindow = 0, now
-            end
-            if loads >= MAX_NEW_LOADS_PER_MIN then
+            -- Moves of a weapon the local player doesn't carry aren't in memory yet.
+            if not countLoad() then
                 return nil
             end
-            loads = loads + 1
             pcall(LoadAsset, path)
             m = StaticFindObject(path)
         end
@@ -117,6 +141,15 @@ return function(api)
     coop.handlers.U = function(rest)
         local path, pos = (rest or ""):match("^(%S+)%s+(%S+)$")
         pos = tonumber(pos)
+        if path == "-" then
+            if not net.pvp and valid(moves.ghostMontage) and valid(net.ghost) then
+                local ai = animOf(net.ghost)
+                if ai then
+                    pcall(function() ai:Montage_Stop(STOP_BLEND_S, moves.ghostMontage) end)
+                end
+            end
+            return
+        end
         if not (allowedPath(path) and pos and pos == pos and pos >= 0 and pos < 600) then
             moves.refused = moves.refused + 1
             return
@@ -135,6 +168,7 @@ return function(api)
         local ok = pcall(function() ai:Montage_Play(m, 1.0, 0, start, true) end)
         if ok then
             moves.played = moves.played + 1
+            moves.ghostMontage = m
             if game.noteGhostMove then
                 game.noteGhostMove()
             end
@@ -143,7 +177,123 @@ return function(api)
         end
     end
 
-    -- Ability replays only until the partner sends montages (and always in PvP).
+    ------------------------------------------------------------------ what the partner holds
+
+    -- Attacks came out empty-handed: the abilities that draw the blade don't run on a ghost, and its gear is this PC's
+    -- backpack, not the partner's. So the sender says what it holds and whether it's drawn ("W <weapon config> <0|1>"),
+    -- and the ghost's own weapons component is brought to that (and kept there: the ghost's blueprint follows this PC's
+    -- backpack, and a new ghost starts from it).
+    local GEAR_WATCH_S = 0.1        -- how often the sender checks that the blade is drawn
+    local GEAR_PATH_S = 0.5         -- and which weapon it is
+    local GEAR_DRESS_S = 0.25       -- how often the ghost is checked against the partner
+    local GEAR_SWAP_S = 5.0         -- a weapon change that didn't take isn't tried again sooner
+    local gear = { watchAt = 0, pathAt = 0, dressAt = 0, swapAt = 0 }
+
+    local function mainSlot()
+        gear.slot = gear.slot or { TagName = FName("Weapon.Slot.Main") }
+        return gear.slot
+    end
+
+    local function heldConfig(cwc)
+        local data = {}
+        cwc:GetCurrentWeapon(mainSlot(), data, false, {})
+        return valid(data.WeaponConfig) and pathOf(data.WeaponConfig) or nil
+    end
+
+    local function isWeaponConfig(obj)
+        local ok, yes = pcall(function()
+            return obj:IsA(StaticFindObject("/Script/PBZCombatAsset.PBZ_WeaponConfigBase"))
+        end)
+        return ok and yes == true
+    end
+
+    local function watchGear(now)
+        if now < gear.watchAt then
+            return
+        end
+        gear.watchAt = now + GEAR_WATCH_S
+        local pawn = coop.localPawn()
+        if pawn == nil then
+            return
+        end
+        local cwc = pawn["Character Weapons Component"]
+        local armed = cwc:IsArmed(mainSlot()) == true
+        if now >= gear.pathAt then
+            gear.pathAt = now + GEAR_PATH_S
+            gear.path = heldConfig(cwc) or gear.path
+        end
+        if gear.path and (armed ~= gear.sentArmed or gear.path ~= gear.sentPath) then
+            gear.sentArmed, gear.sentPath = armed, gear.path
+            coop.sendEvent("W", gear.path, armed and 1 or 0)
+        end
+    end
+
+    coop.handlers.W = function(rest)
+        local path, armed = (rest or ""):match("^(%S+)%s+([01])$")
+        if not allowedPath(path) then
+            moves.refused = moves.refused + 1
+            return
+        end
+        if path ~= gear.partnerPath then
+            gear.swapAt = 0
+        end
+        gear.partnerPath, gear.partnerArmed = path, armed == "1"
+        gear.dressAt = 0
+    end
+
+    -- Weapon configs load like montages: same paths, same cap. Not an AnimMontage, so not through the same cache.
+    local function weaponConfig(path)
+        local cfg = gear.config
+        if cfg and gear.configPath == path and valid(cfg) then
+            return cfg
+        end
+        cfg = StaticFindObject(path)
+        if not valid(cfg) and type(LoadAsset) == "function" and countLoad() then
+            pcall(LoadAsset, path)
+            cfg = StaticFindObject(path)
+        end
+        if valid(cfg) and isWeaponConfig(cfg) then
+            gear.config, gear.configPath = cfg, path
+            return cfg
+        end
+        return nil
+    end
+
+    local function dressGhost(now)
+        local ghost = net.ghost
+        if not gear.partnerPath or now < gear.dressAt or not valid(ghost) or net.ghostHidden then
+            return
+        end
+        gear.dressAt = now + GEAR_DRESS_S
+        local cwc = ghost["Character Weapons Component"]
+        local slot = mainSlot()
+        if now >= gear.swapAt and heldConfig(cwc) ~= gear.partnerPath then
+            gear.swapAt = now + GEAR_SWAP_S
+            local cfg = weaponConfig(gear.partnerPath)
+            if cfg then
+                cwc:SetSlotWeapon(slot, math.max(cwc:GetCurrentWeaponIndex(slot, false) or 0, 0), cfg)
+                log("The ghost now holds " .. gear.partnerPath:match("([^.]+)$") .. ".")
+            end
+        end
+        if (cwc:IsArmed(slot) == true) ~= gear.partnerArmed then
+            cwc:SetArmed(slot, gear.partnerArmed)
+        end
+    end
+
+    function moves.hideGear(ghost, hide)
+        local cwc = ghost["Character Weapons Component"]
+        local slot = mainSlot()
+        cwc:SetWeaponAndScabbardForceHide(slot, math.max(cwc:GetCurrentWeaponIndex(slot, false) or 0, 0), hide)
+    end
+
+    -- The partner has just (re)started sync: it knows nothing yet.
+    local partnerStarted = coop.handlers.S
+    coop.handlers.S = function(rest)
+        gear.sentPath = nil
+        return partnerStarted(rest)
+    end
+
+    -- Ability replays only in PvP.
     local replayAbility = coop.handlers.M
     if replayAbility then
         coop.handlers.M = function(rest)
@@ -162,6 +312,15 @@ return function(api)
                 moves.lastError = err
                 log("moves: " .. tostring(err))
             end
+        end
+        local now = os.clock()
+        ok, err = pcall(watchGear, now)
+        if ok then
+            ok, err = pcall(dressGhost, now)
+        end
+        if not ok and err ~= gear.lastError then
+            gear.lastError = err
+            log("moves (gear): " .. tostring(err))
         end
     end
 

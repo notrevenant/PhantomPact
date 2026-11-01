@@ -1,19 +1,17 @@
 <#
 .SYNOPSIS
     End-to-end co-op test: two PBZ copies on this PC (host + client), checked feature by feature.
-    Starts both copies (pbz-selftest.ps1), continues both saves, connects them, then checks: players see each
-    other, client matches host enemies, client hits land in the host world, boss fight + boss bar, host kills
-    reach the client, bell rest, shared dust, shared loot. Cleans up the test dust/items and stops everything.
+    Starts both copies (pbz-selftest.ps1), whose PhantomPact.ini files say Host and Guest, so the mods start their relays
+    and turn co-op on by themselves, as for players. Continues both saves, then checks: players see each other, client
+    matches host enemies, client hits land in the host world, boss fight + boss bar, host kills reach the client,
+    bell rest, shared dust, shared loot. Cleans up the test dust/items and stops everything.
     Prints PASS/FAIL per check; exit code 0 only if all pass.
 
 .EXAMPLE
     .\tools\pbz-e2e.ps1
 #>
 param(
-    [string]$GameWin64 = 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam',
-    # Test the player setup: PhantomPact.ini says Host (copy 1) and Guest (copy 2), and the mod starts its own
-    # relays and turns sync on by itself. Without it the test starts the relays and sends neton itself.
-    [switch]$Auto
+    [string]$GameWin64 = 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,17 +25,8 @@ function Check([string]$name, [bool]$ok, [string]$detail) {
 Get-Process PBZ -ErrorAction SilentlyContinue | Where-Object SessionId -eq (Get-Process -Id $PID).SessionId | Stop-Process -Force
 Start-Sleep 3
 & (Join-Path $PSScriptRoot 'install-mod.ps1') -GameWin64 $GameWin64 | Out-Null
-$modRoot = Join-Path $GameWin64 'ue4ss\Mods\PBZCoop'
-New-Item -ItemType Directory -Force (Join-Path $modRoot 'inst2') | Out-Null
-$ini1, $ini2 = (Join-Path $modRoot 'PhantomPact.ini'), (Join-Path $modRoot 'inst2\PhantomPact.ini')
-if ($Auto) {
-    Set-Content $ini1 "Role = Host`r`nPort = 47800" -Encoding ascii
-    Set-Content $ini2 "Role = Guest`r`nHostAddress = 127.0.0.1`r`nPort = 47800" -Encoding ascii
-} else {
-    Set-Content $ini1 'Role = Off' -Encoding ascii; Set-Content $ini2 'Role = Off' -Encoding ascii
-}
 $t0Launch = Get-Date
-if ($Auto) { & (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -NoRelays | Out-Null } else { & (Join-Path $PSScriptRoot 'pbz-selftest.ps1') | Out-Null }
+& (Join-Path $PSScriptRoot 'pbz-selftest.ps1') | Out-Null
 $state = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) 'logs\selftest-last.json') -Raw | ConvertFrom-Json
 $hostPid, $clientPid = @($state.Games)[0], @($state.Games)[1]
 if (-not $clientPid) { Check 'two copies start' $false 'copy 2 did not start'; exit 1 }
@@ -65,20 +54,16 @@ foreach ($i in 1, 2) {
 # Same spot and facing in both worlds, so enemies spawned "in front" stand at the same place in each.
 $setup = 'eval local pc,p=PBZ.getPlayer1() p:K2_SetActorLocation({X=-107617,Y=221427,Z=-13250},false,{},true) p:K2_SetActorRotation({Pitch=0,Yaw=25.8,Roll=0},false) pc:SetControlRotation({Pitch=-10,Yaw=25.8,Roll=0}) return "ok"'
 Run 1 $setup | Out-Null; Run 2 $setup | Out-Null
-if ($Auto) {
-    # The mods started their relays at launch and turn sync on by themselves once in gameplay.
-    $deadline = (Get-Date).AddSeconds(30)
-    do { Start-Sleep 2; $boot = @(Get-ModLog -Since $t0Launch -Last 5000) } until (
-        (($boot | Where-Object { $_ -match '\[PBZCoop\] Phantom Pact Host: co-op on' }) -and
-         ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Phantom Pact Guest: co-op on' })) -or (Get-Date) -gt $deadline)
-    $started = ($boot | Where-Object { $_ -match '\[PBZCoop\] Relay started as host' }) -and ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Relay started as guest' })
-    $on = ($boot | Where-Object { $_ -match 'Host: co-op on' }) -and ($boot | Where-Object { $_ -match 'Guest: co-op on' })
-    Check 'mods start their relays from PhantomPact.ini' ([bool]$started) ''
-    Check 'co-op turns on by itself in gameplay' ([bool]$on) ''
-    Start-Sleep 4
-} else {
-    Run 1 'neton host' 1 | Out-Null; Run 2 'neton client' 4 | Out-Null
-}
+# The mods started their relays at launch and turn sync on by themselves once in gameplay.
+$deadline = (Get-Date).AddSeconds(30)
+do { Start-Sleep 2; $boot = @(Get-ModLog -Since $t0Launch -Last 5000) } until (
+    (($boot | Where-Object { $_ -match '\[PBZCoop\] Phantom Pact Host: co-op on' }) -and
+     ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Phantom Pact Guest: co-op on' })) -or (Get-Date) -gt $deadline)
+$started = ($boot | Where-Object { $_ -match '\[PBZCoop\] Relay started as host' }) -and ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Relay started as guest' })
+$on = ($boot | Where-Object { $_ -match 'Host: co-op on' }) -and ($boot | Where-Object { $_ -match 'Guest: co-op on' })
+Check 'mods start their relays from PhantomPact.ini' ([bool]$started) ''
+Check 'co-op turns on by itself in gameplay' ([bool]$on) ''
+Start-Sleep 4
 $h = Run 1 'netstatus'; $c = Run 2 'netstatus'
 Check 'relay connected' (($h -join ' ') -match 'connected=yes' -and ($c -join ' ') -match 'connected=yes') ''
 Check 'players see each other' (($h -join ' ') -match 'ghost=true' -and ($c -join ' ') -match 'ghost=true') ''
@@ -141,16 +126,7 @@ Run 1 'netoff' | Out-Null; Run 2 'netoff' | Out-Null
 $errors = Get-ModLog -Since (Get-Date).AddMinutes(-15) | Where-Object { $_ -match 'net error|event \w+ error|\.lua:\d+' }
 Check 'no mod errors' (-not $errors) (($errors | Select-Object -First 2) -join ' | ')
 & (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -Stop | Out-Null
-if ($Auto) {
-    # The relays the mods started must notice the games are gone (stale heartbeat) and exit.
-    $deadline = (Get-Date).AddSeconds(60)
-    do { Start-Sleep 3; $left = @(Get-CimInstance Win32_Process -Filter "Name like 'py%'" | Where-Object { $_.CommandLine -match 'pbzcoop_net.*--alive-file' }) } until (-not $left -or (Get-Date) -gt $deadline)
-    Check 'relays close when the game closes' (-not $left) "$($left.Count) left"
-    # Back to the shipped settings (Guest with no address = off), so a normal game start doesn't auto-host.
-    Copy-Item (Join-Path (Split-Path $PSScriptRoot -Parent) 'mod\PBZCoop\PhantomPact.ini') $ini1 -Force
-    Remove-Item $ini2 -Force
-}
 
-$failed = @($results.GetEnumerator() | Where-Object { -not $_.Value }).Count
+$failed =@($results.GetEnumerator() | Where-Object { -not $_.Value }).Count
 Write-Output ("`n{0} of {1} checks passed" -f ($results.Count - $failed), $results.Count)
 exit $(if ($failed) { 1 } else { 0 })

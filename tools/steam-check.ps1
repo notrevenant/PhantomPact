@@ -1,7 +1,7 @@
-# Connect = Steam on one PC: two copies (host + guest, same Steam account), each mod starts its relay over Steam
-# next to the running game. One account can't reach itself through Steam, so this proves the relays run beside
-# the games (Steam starts in the relay, games stay up, no mod errors, relays exit with the games); the real
-# connection needs a second Steam account on another PC.
+# Connect = Steam on one PC: two copies (host + guest, same Steam account), each mod starts the relay in its main.dll over
+# Steam, sharing the game's own Steam connection. One account can't reach itself through Steam, so this proves the Steam
+# link starts inside the game (Steam starts in the relay, games stay up, no mod errors); the real connection needs a
+# second Steam account on another PC.
 $ErrorActionPreference = 'Stop'
 $GameWin64 = 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam'
 . (Join-Path $PSScriptRoot 'game-driver.ps1') -GameWin64 $GameWin64 -ProcessName 'PBZ'
@@ -14,12 +14,8 @@ Get-Process PBZ -ErrorAction SilentlyContinue | Where-Object SessionId -eq (Get-
 Start-Sleep 3
 & (Join-Path $PSScriptRoot 'install-mod.ps1') -GameWin64 $GameWin64 | Out-Null
 $modRoot = Join-Path $GameWin64 'ue4ss\Mods\PBZCoop'
-New-Item -ItemType Directory -Force (Join-Path $modRoot 'inst2') | Out-Null
-$ini1, $ini2 = (Join-Path $modRoot 'PhantomPact.ini'), (Join-Path $modRoot 'inst2\PhantomPact.ini')
-Set-Content $ini1 "Role = Host`r`nConnect = Steam" -Encoding ascii
-Set-Content $ini2 "Role = Guest`r`nConnect = Steam" -Encoding ascii
 $t0 = Get-Date
-& (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -NoRelays | Out-Null
+& (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -Connect Steam | Out-Null
 $state = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) 'logs\selftest-last.json') -Raw | ConvertFrom-Json
 $games = @($state.Games)
 Check 'two copies start' ($games.Count -eq 2) "$($games -join ', ')"
@@ -46,9 +42,5 @@ Check 'both games still running' ($alive.Count -eq 2) ''
 $errors = @($log | Where-Object { $_ -match 'net error|event \w+ error|\.lua:\d+' })
 Check 'no mod errors' (-not $errors) (($errors | Select-Object -First 2) -join ' | ')
 & (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -Stop | Out-Null
-$deadline = (Get-Date).AddSeconds(60)
-do { Start-Sleep 3; $left = @(Get-CimInstance Win32_Process -Filter "Name like 'py%'" | Where-Object { $_.CommandLine -match 'pbzcoop_net.*--alive-file' }) } until (-not $left -or (Get-Date) -gt $deadline)
-Check 'relays close when the game closes' (-not $left) "$($left.Count) left"
-Remove-Item $ini2 -Force
 $failed = @($results.GetEnumerator() | Where-Object { -not $_.Value }).Count
 Write-Output ("`n{0} of {1} checks passed" -f ($results.Count - $failed), $results.Count)

@@ -15,7 +15,7 @@ function Q([int]$i, [string]$c, [double]$w = 1.0) { ((& "$p\pvp-run.ps1" -I $i -
 function Num([string]$text, [string]$key) { if ($text -match "$key=(-?[\d.]+)") { [double]$Matches[1] } else { [double]::NaN } }
 . "$p\..\game-driver.ps1" -GameWin64 'D:\SteamLibrary\steamapps\common\PBZ\platform\steam' -ProcessName 'PBZ'
 
-& "$p\..\pbz-selftest.ps1" -Stop | Out-Null     # an earlier run's relays would hold the port
+& "$p\..\pbz-selftest.ps1" -Stop | Out-Null     # an earlier run's copies would hold the port
 $ready = @(& "$p\pvp-session.ps1" 2>&1 | Select-String 'gameplay')
 $ready
 if (@($ready | Where-Object { $_ -match 'gameplay: True' }).Count -ne 2) {
@@ -172,11 +172,10 @@ Check 'same pickup grabbed by both: no second copy' ($m1 -eq $m0 -and $dup -matc
 Check "partner's pickup is still shared" ($m2 -eq $m1 + 1) "material $m1 -> $m2"
 Q 1 'eval local _,p=PBZ.getPlayer1() local bp=StaticFindObject("/Script/Engine.Default__SubsystemBlueprintLibrary"):GetWorldSubsystem(p, StaticFindObject("/Script/ProjectPBZ.PBZBackPackSubsystem")) local n=PBZ.game.itemCount(bp,"Weapon_Material_01") if n>0 then bp:RemovePropsFromBackPack(n, FName("Weapon_Material_01"), false) end return "clean"' | Out-Null
 
-# --- the partner vanishes (crash, quit, lost connection): the host's relay dies. Both sides must notice, hide the
-# frozen ghost and release what was held for them.
-$state = Get-Content "$p\..\..\logs\selftest-last.json" -Raw | ConvertFrom-Json
+# --- the partner vanishes (crash, quit, lost connection): the host's relay stops, with sync left on and both games up.
+# Both sides must notice, hide the frozen ghost and release what was held for them.
 $tg = Get-Date
-Stop-Process -Id @($state.Relays)[0] -Force -ErrorAction SilentlyContinue
+Q 1 'eval PBZ.link.stop() return "relay stopped"' 0.5 | Out-Null
 Start-Sleep 16
 $log = @(Get-ModLog -Since $tg -Last 3000)
 $cs = Q 2 'netstatus'

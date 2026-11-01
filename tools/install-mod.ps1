@@ -41,14 +41,13 @@ $target = Join-Path $modsDir 'PBZCoop'
 # Copy over the top rather than deleting first, so runtime folders (inst2\ for the self-test, net files) survive.
 New-Item -ItemType Directory -Force $target | Out-Null
 Copy-Item (Join-Path $source '*') $target -Recurse -Force
-# The relay lives in the mod folder; autostart.lua starts it from there (PhantomPact.ini, Role = Host/Guest).
-New-Item -ItemType Directory -Force (Join-Path $target 'relay') | Out-Null
-Copy-Item (Join-Path $PSScriptRoot '..\net\pbzcoop_net.py'), (Join-Path $PSScriptRoot '..\net\steam_transport.py') (Join-Path $target 'relay') -Force
-# The built-in relay, if tools\build-native.ps1 has been run; without it the mod falls back to Python.
+# The relay, once tools\build-native.ps1 has been run: online co-op needs it.
 $nativeDll = Join-Path $PSScriptRoot '..\native\build\main.dll'
 if (Test-Path $nativeDll) {
     New-Item -ItemType Directory -Force (Join-Path $target 'dlls') | Out-Null
     Copy-Item $nativeDll (Join-Path $target 'dlls') -Force
+} elseif (-not (Test-Path (Join-Path $target 'dlls\main.dll'))) {
+    Write-Warning "native\build\main.dll isn't built, and this install has none: online co-op won't start. Run tools\build-native.ps1 first."
 }
 # This is the developer install (the tests send "eval" through cmd.txt): turn eval on. The release zip has no dev.txt.
 Set-Content (Join-Path $target 'dev.txt') 'eval enabled for development (tools\install-mod.ps1)' -Encoding ascii

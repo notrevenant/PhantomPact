@@ -160,25 +160,26 @@ def health_bar():
     save(img, "bar_fill")
 
 
-os.makedirs(OUT, exist_ok=True)
-health_bar()
-background()
-close()
-for n in (1, 2, 3, 4):
-    tab(n)
-for n in (1, 2, 3, 4):
-    slot(n)
-thumb("layout_tb", [(0, 0, 1, .5), (0, .5, 1, 1)])
-thumb("layout_lr", [(0, 0, .5, 1), (.5, 0, 1, 1)])
-thumb("layout_3top", [(0, 0, 1, .5), (0, .5, .5, 1), (.5, .5, 1, 1)])
-thumb("layout_3bottom", [(0, 0, .5, .5), (.5, 0, 1, .5), (0, .5, 1, 1)])
-thumb("layout_4", [(0, 0, .5, .5), (.5, 0, 1, .5), (0, .5, .5, 1), (.5, .5, 1, 1)])
-selected("sel_tab", 64, 64)
-selected("sel_layout", 118, 70)
-card("card_kbm", "Keyboard & Mouse", "one per game")
-for n in (1, 2, 3, 4):
-    card("card_joy%d" % n, "Joystick %d" % n, "connected")
-hold()
-button("apply", "APPLY")
-button("applied", "APPLIED", red=True)
-print("panel art written to", os.path.normpath(OUT))
+if __name__ == "__main__":
+    os.makedirs(OUT, exist_ok=True)
+    health_bar()
+    background()
+    close()
+    for n in (1, 2, 3, 4):
+        tab(n)
+    for n in (1, 2, 3, 4):
+        slot(n)
+    thumb("layout_tb", [(0, 0, 1, .5), (0, .5, 1, 1)])
+    thumb("layout_lr", [(0, 0, .5, 1), (.5, 0, 1, 1)])
+    thumb("layout_3top", [(0, 0, 1, .5), (0, .5, .5, 1), (.5, .5, 1, 1)])
+    thumb("layout_3bottom", [(0, 0, .5, .5), (.5, 0, 1, .5), (0, .5, 1, 1)])
+    thumb("layout_4", [(0, 0, .5, .5), (.5, 0, 1, .5), (0, .5, .5, 1), (.5, .5, 1, 1)])
+    selected("sel_tab", 64, 64)
+    selected("sel_layout", 118, 70)
+    card("card_kbm", "Keyboard & Mouse", "one per game")
+    for n in (1, 2, 3, 4):
+        card("card_joy%d" % n, "Joystick %d" % n, "connected")
+    hold()
+    button("apply", "APPLY")
+    button("applied", "APPLIED", red=True)
+    print("panel art written to", os.path.normpath(OUT))

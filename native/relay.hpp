@@ -1,6 +1,12 @@
-// The relay inside the game: the same job, files and packets as net/pbzcoop_net.py (read its header first), so a
-// C++ relay and a Python one can be partners and the same tests cover both. UE4SS Lua can't open sockets, so this
-// runs on its own thread in main.dll (main_dll.cpp); relay_cli.cpp wraps it as a console tool for the tests.
+// The relay inside the game. UE4SS Lua can't open sockets, so this runs on its own thread in main.dll (main_dll.cpp),
+// and the mod reaches it through direct calls (lua_link.hpp) with nothing on disk between them: the game thread only
+// copies a few bytes in or out of the Mailbox here. relay_cli.cpp wraps it as a console tool for the tests.
+//
+// Protocol 3, one packet (all little-endian):
+//   header   marker, protocol, flags, session, partner's session, sequence, time, echoed time, hold, acknowledgement
+//   sections state (the player, newest wins) | sure and quick events (lanes.hpp) | enemy lines | hello
+// A packet goes out the moment the game has something new, carrying whatever else is waiting, so an acknowledgement or
+// an event never needs a packet of its own while the game is running.
 #pragma once
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -19,35 +25,40 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "crypto.hpp"
-#include "json.hpp"
+#include "lanes.hpp"
+#include "timeline.hpp"
 
 namespace relay {
 
-constexpr double TICK = 0.05;          // 20 sends per second
-constexpr double WATCH = 0.005;        // how often the mod's files are checked for something new to send at once
-constexpr double PING_EVERY = 1.0;
+constexpr int PROTOCOL = 3;
+constexpr unsigned char MARKER = 0xA3;     // first byte of every packet: never '{' (protocol 2) or 'P' (a signed packet)
+constexpr double TICK = 0.005;             // how often the relay looks at its timers when nothing else wakes it
+constexpr double KEEPALIVE_EVERY = 0.25;   // the game thread can stand still (a load): the relay still says it's here
 constexpr double PEER_TIMEOUT = 3.0;
 constexpr double HELLO_EVERY = 2.0;
-constexpr double ALIVE_TIMEOUT = 180.0; // s without a heartbeat from the mod before the relay gives up (it's sent from
-                                        // the game thread, which stands still through a long load)
-constexpr int PROTOCOL = 2;
-constexpr size_t MAX_EVENTS_PER_PACKET = 40;
-constexpr size_t MAX_EVENT_BYTES = 1000;  // and this much text, so a packet stays under a VPN's 1280-byte limit
-constexpr size_t MAX_SNAPSHOT_BYTES = 48000;
-constexpr double ENEMY_EVERY = 0.1;       // enemies go in their own, larger packet: losing one can't cost the position
-constexpr double SESSION_EVERY = 1.0;     // the event session is repeated this often when no events are pending
+constexpr double PROBE_EVERY = 1.0;
+constexpr double ACK_WAIT = 0.004;         // a bare acknowledgement goes out if no packet does within this time
+constexpr double QUICK_GAP = 0.012;        // repeats of a quick event, spaced so one burst of loss doesn't take them all
+constexpr double RETRY_MIN = 0.03, RETRY_MAX = 0.5;
+constexpr size_t MAX_PACKET = 1100;        // with a signature, still under a VPN's 1280-byte limit
+constexpr size_t MAX_TEXT = 900;           // one event or enemy line
+constexpr int MAX_PACKETS_AT_ONCE = 6;
+constexpr size_t MAX_ENEMY_LINES = 128;    // waiting to go: the oldest are out of date anyway
+constexpr size_t MAX_INBOX_BYTES = 1 << 20;
+constexpr size_t MAX_QUICK_WAITING = 256;
 constexpr int MAX_PACKETS_PER_RECEIVE = 256;
-constexpr size_t MAX_ACKED_SESSIONS = 16;   // ack session ids come from the network: don't keep them forever
 
 inline std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
@@ -74,6 +85,12 @@ inline double monotonic() {
     LARGE_INTEGER c;
     QueryPerformanceCounter(&c);
     return c.QuadPart / freq;
+}
+
+// Milliseconds since the mod started: what packets are stamped with, and it can't wrap 32 bits within a session.
+inline double clock_ms() {
+    static const double start = monotonic();
+    return (monotonic() - start) * 1000.0;
 }
 
 inline double wall_seconds() {
@@ -109,14 +126,6 @@ inline std::string read_text(const std::wstring& path) {
         out.swap(clean);
     }
     return out;
-}
-
-// read_text, minus a last line the mod is still writing (no newline yet): it is sent once it's complete.
-inline std::string read_complete_lines(const std::wstring& path) {
-    std::string text = read_text(path);
-    size_t last = text.rfind('\n');
-    text.resize(last == std::string::npos ? 0 : last + 1);
-    return text;
 }
 
 // False if the file couldn't be written this time; the next tick writes fresh data anyway. The mod may have the
@@ -160,72 +169,12 @@ inline bool append_lines(const std::wstring& path, const std::vector<std::string
     return false;
 }
 
-using Event = std::pair<long long, std::string>;   // id, whole line
-
-struct ParsedEvents {
-    std::optional<std::string> session;
-    std::vector<Event> events;
-};
-
 inline std::string strip(const std::string& s) {
     size_t a = 0, b = s.size();
     while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) a++;
     while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) b--;
     return s.substr(a, b - a);
 }
-
-inline ParsedEvents parse_events(const std::string& text) {
-    ParsedEvents out;
-    size_t pos = 0;
-    while (pos < text.size()) {
-        size_t end = text.find('\n', pos);
-        if (end == std::string::npos) end = text.size();
-        std::string line = text.substr(pos, end - pos);
-        pos = end + 1;
-        size_t space = line.find(' ');
-        std::string head = line.substr(0, space);
-        if (head.empty()) continue;
-        if (head == "S" && space != std::string::npos) {
-            out.session = strip(line.substr(space + 1));
-        } else if (head.size() <= 12 && std::all_of(head.begin(), head.end(), [](char c) { return c >= '0' && c <= '9'; })) {
-            out.events.emplace_back(std::strtoll(head.c_str(), nullptr, 10), line);
-        }
-    }
-    return out;
-}
-
-// Writes the peer's events to net_events_in.txt exactly once each, in order.
-class EventInbox {
-public:
-    explicit EventInbox(std::wstring path) : path_(std::move(path)) {}
-
-    long long accept(const std::string& session, std::vector<Event> events) {
-        if (!session_ || *session_ != session) {
-            // The peer restarted its mod: start a fresh file so old events aren't replayed.
-            if (!write_atomic(path_, "S " + session + "\n")) return 0;
-            session_ = session;
-            last_id = 0;
-        }
-        std::sort(events.begin(), events.end());
-        std::vector<std::string> fresh;
-        long long last = last_id;
-        for (auto& [id, line] : events) {
-            if (id == last + 1) {
-                fresh.push_back(std::move(line));
-                last = id;
-            }
-        }
-        // Only acknowledged once written: if the write fails the peer keeps resending them.
-        if (!fresh.empty() && append_lines(path_, fresh)) last_id = last;
-        return last_id;
-    }
-
-    long long last_id = 0;
-
-private:
-    std::wstring path_;
-    std::optional<std::string> session_;
-};
 
 // Where a partner can be: Tailscale (100.64.0.0/10), home networks, this PC, and the Hamachi (25/8) and Radmin
 // (26/8) VPN ranges. The host takes packets only from these unless AllowAnyAddress is on.
@@ -238,7 +187,7 @@ inline bool address_allowed(uint32_t ip) {
     return false;
 }
 
-// Optional shared secret (Secret = ... in PhantomPact.ini): see Auth in pbzcoop_net.py for why each check exists.
+// Optional shared secret (Secret = ... in PhantomPact.ini).
 // packet = MAGIC | role (1) | session (8) | counter (8) | time ms (8) | payload | HMAC-SHA256 (32)
 class Auth {
 public:
@@ -247,6 +196,7 @@ public:
     static constexpr size_t TAG = 32;
     static constexpr double REPLAY_WINDOW_S = 120.0;
     static constexpr size_t SESSIONS_KEPT = 8;
+    static constexpr uint64_t COUNTERS_KEPT = 64;      // the network can reorder: a late packet isn't a replay
 
     Auth(const std::string& secret, const std::string& role) {
         std::string master = crypto::scrypt(secret, "PhantomPact/relay/1", 1 << 14, 8, 32);
@@ -290,21 +240,37 @@ public:
         uint64_t sent_ms = get_u64(body.data() + 21);
         if (body[4] == role_ || session == session_) return std::nullopt;
         if (std::fabs(wall_seconds() * 1000 - static_cast<double>(sent_ms)) > REPLAY_WINDOW_S * 1000) return std::nullopt;
-        auto it = std::find_if(seen_.begin(), seen_.end(), [&](const auto& s) { return s.first == session; });
+        Seen entry{session, counter, 1};
+        auto it = std::find_if(seen_.begin(), seen_.end(), [&](const Seen& s) { return s.session == session; });
         if (it != seen_.end()) {
-            if (counter <= it->second) return std::nullopt;
+            entry = *it;
+            if (counter > entry.top) {
+                const uint64_t ahead = counter - entry.top;
+                entry.bits = ahead >= COUNTERS_KEPT ? 0 : entry.bits << ahead;
+                entry.bits |= 1;
+                entry.top = counter;
+            } else {
+                const uint64_t back = entry.top - counter;
+                if (back >= COUNTERS_KEPT || (entry.bits >> back) & 1) return std::nullopt;
+                entry.bits |= 1ull << back;
+            }
             seen_.erase(it);
         }
-        seen_.emplace_back(session, counter);
+        seen_.push_back(std::move(entry));
         while (seen_.size() > SESSIONS_KEPT) seen_.erase(seen_.begin());
         return body.substr(HEADER);
     }
 
 private:
+    struct Seen {
+        std::string session;
+        uint64_t top = 0, bits = 0;      // highest counter accepted; bit n set = top - n was accepted too
+    };
+
     std::string key_, session_;
     char role_ = 'C';
     uint64_t counter_ = 0;
-    std::vector<std::pair<std::string, uint64_t>> seen_;   // oldest first: session, highest counter accepted
+    std::vector<Seen> seen_;             // oldest first
 };
 
 using Ini = std::map<std::string, std::string>;
@@ -362,8 +328,13 @@ public:
     virtual ~Link() = default;
     virtual void send(const Addr& to, const std::string& data) = 0;
     virtual std::vector<std::pair<Addr, std::string>> receive() = 0;
-    virtual bool wait(double seconds) = 0;                 // true once a packet may be waiting
+    virtual void wait(double seconds, HANDLE wake) = 0;    // until a packet may be waiting, wake is set, or time's up
     virtual std::vector<Addr> candidates() { return {}; }  // guests with no host yet ping these
+    struct Route {
+        const char* kind = "-";    // "direct", "relay", or "-" if the link can't tell
+        int ping_ms = -1;          // the link's own measure of the round trip, if it has one
+    };
+    virtual Route route(const Addr&) { return {}; }
     virtual std::string describe(const Addr& a) = 0;
     virtual std::string describe_self() = 0;
     virtual const char* via() = 0;
@@ -373,21 +344,21 @@ public:
 
 class UdpLink : public Link {
 public:
-    UdpLink(const std::string& role, const std::string& peer_host, int port, bool allow_any) : allow_any_(allow_any) {
+    UdpLink(const std::string& role, const std::string& peer_host, int port, bool allow_any, bool this_pc_only)
+        : allow_any_(allow_any) {
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) throw std::runtime_error("Winsock didn't start");
         sock_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (sock_ == INVALID_SOCKET) throw std::runtime_error("couldn't open a UDP socket");
-        u_long nonblocking = 1;
-        ioctlsocket(sock_, FIONBIO, &nonblocking);
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_addr.s_addr = htonl(this_pc_only ? INADDR_LOOPBACK : INADDR_ANY);
         addr.sin_port = htons(static_cast<u_short>(role == "host" ? port : 0));
         if (bind(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0) {
+            const int err = WSAGetLastError();
             closesocket(sock_);
-            throw std::runtime_error("couldn't use UDP port " + std::to_string(port) + " (error " +
-                                     std::to_string(WSAGetLastError()) + ")");
+            throw std::runtime_error("UDP port " + std::to_string(port) + (err == WSAEADDRINUSE ? " is in use on this PC" : " can't be used") +
+                                     " (error " + std::to_string(err) + "): set another Port in PhantomPact.ini on both PCs");
         }
         if (role != "host") {
             // Resolved once (a Tailscale name works too): replies are matched against this exact address.
@@ -405,9 +376,13 @@ public:
             freeaddrinfo(found);
             peer = a;
         }
+        // Signalled the moment a packet lands, so the relay sleeps instead of polling. Makes the socket non-blocking.
+        readable_ = WSACreateEvent();
+        WSAEventSelect(sock_, readable_, FD_READ);
     }
 
     ~UdpLink() override {
+        WSACloseEvent(readable_);
         closesocket(sock_);
         WSACleanup();
     }
@@ -443,14 +418,12 @@ public:
         return out;
     }
 
-    bool wait(double seconds) override {
-        fd_set read;
-        FD_ZERO(&read);
-        FD_SET(sock_, &read);
-        timeval tv;
-        tv.tv_sec = static_cast<long>(seconds);
-        tv.tv_usec = static_cast<long>((seconds - tv.tv_sec) * 1e6);
-        return select(0, &read, nullptr, nullptr, &tv) > 0;
+    void wait(double seconds, HANDLE wake) override {
+        HANDLE events[2] = {wake, readable_};
+        // A socket event stays set until it's reset: left alone, this thread spins a whole core from the first packet on.
+        // Reset before the read that follows, so a packet landing after that read sets it again.
+        if (WaitForMultipleObjects(2, events, FALSE, static_cast<DWORD>(std::ceil(seconds * 1000))) == WAIT_OBJECT_0 + 1)
+            WSAResetEvent(readable_);
     }
 
     std::string describe(const Addr& a) override {
@@ -470,64 +443,450 @@ public:
 
 private:
     SOCKET sock_ = INVALID_SOCKET;
+    WSAEVENT readable_ = WSA_INVALID_EVENT;
     bool allow_any_;
 };
+
+// Between the game thread and the relay thread. Everything here is a quick copy under a lock neither side holds across
+// anything slow, so the game can never wait on the network.
+class Mailbox {
+public:
+    Mailbox() {
+        InitializeSRWLock(&lock_);
+        wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    }
+
+    struct Outgoing {
+        bool have_sample = false, reset = false, map_changed = false;
+        Sample sample;
+        std::string map;
+        std::vector<std::string> sure, quick, enemies;
+    };
+
+    // Game thread.
+
+    void post_sample(const Sample& s) {
+        {
+            Lock hold(lock_);
+            out_.sample = s;
+            out_.have_sample = true;
+        }
+        SetEvent(wake);
+    }
+
+    void post_sure(std::string text) { post(out_.sure, std::move(text)); }
+    void post_quick(std::string text) { post(out_.quick, std::move(text)); }
+
+    void post_enemy(std::string text) {
+        Lock hold(lock_);
+        keep(out_.enemies, std::move(text));
+    }
+
+    void post_map(std::string name) {
+        {
+            Lock hold(lock_);
+            out_.map = std::move(name);
+            out_.map_changed = true;
+        }
+        SetEvent(wake);
+    }
+
+    // Sync turned on: whatever waited was for nobody, and the partner gets told this is a new start.
+    void reset() {
+        {
+            Lock hold(lock_);
+            out_.reset = true;
+            out_.sure.clear();
+            out_.quick.clear();
+            out_.enemies.clear();
+            events_.clear();
+            quick_.clear();
+            enemies_.clear();
+            timeline_.clear();
+        }
+        SetEvent(wake);
+    }
+
+    bool partner(double now_ms, Sample& out, double& silence_ms, double& delay_ms) {
+        Lock hold(lock_);
+        silence_ms = timeline_.silence_ms(now_ms);
+        delay_ms = timeline_.delay_ms();
+        return timeline_.at(now_ms, out);
+    }
+
+    // A move that sat here through a long hitch on this PC is as stale as one that arrived late: dropped, not played in a
+    // burst when the game comes back.
+    std::string take_events(double now_ms) {
+        std::string out;
+        Lock hold(lock_);
+        out.swap(events_);
+        for (const Waiting& q : quick_) {
+            if (now_ms - q.arrived_ms > QUICK_WAIT_MS) continue;
+            out.append(q.text);
+            out.push_back('\n');
+        }
+        quick_.clear();
+        return out;
+    }
+
+    std::string take_enemies() {
+        std::string out;
+        Lock hold(lock_);
+        out.swap(enemies_);
+        return out;
+    }
+
+    std::string status() {
+        Lock hold(lock_);
+        return status_;
+    }
+
+    // Relay thread.
+
+    void take_outgoing(Outgoing& into) {
+        Lock hold(lock_);
+        std::swap(into, out_);
+    }
+
+    void on_sample(const Sample& s, double arrived_ms) {
+        Lock hold(lock_);
+        timeline_.push(s, arrived_ms);
+    }
+
+    // False if the game hasn't read enough to leave room.
+    bool on_event(std::string_view text) {
+        Lock hold(lock_);
+        if (events_.size() + text.size() > MAX_INBOX_BYTES) return false;
+        events_.append(text);
+        events_.push_back('\n');
+        return true;
+    }
+
+    void on_quick(std::string_view text, double arrived_ms) {
+        Lock hold(lock_);
+        if (quick_.size() >= MAX_QUICK_WAITING) quick_.pop_front();
+        quick_.push_back({arrived_ms, std::string(text)});
+    }
+
+    void on_enemies(std::string_view text) {
+        Lock hold(lock_);
+        if (enemies_.size() + text.size() > MAX_INBOX_BYTES) enemies_.clear();   // nobody's reading: only the newest count
+        enemies_.append(text);
+        enemies_.push_back('\n');
+    }
+
+    // S always gets in, past the limit too: it's how the game learns that the partner has to be told everything again.
+    void on_partner_restart() {
+        Lock hold(lock_);
+        timeline_.clear();
+        enemies_.clear();
+        events_ += "S\n";
+    }
+
+    void set_status(std::string line) {
+        Lock hold(lock_);
+        status_ = std::move(line);
+    }
+
+    void link_numbers(double& jitter_ms, double& delay_ms) {
+        Lock hold(lock_);
+        jitter_ms = timeline_.jitter_ms();
+        delay_ms = timeline_.delay_ms();
+    }
+
+    // The player left (pp_stop): run() ends. Cleared just before a start file is read, so a Leave after that still counts.
+    void ask_stop() {
+        stop = true;
+        SetEvent(wake);
+    }
+
+    HANDLE wake = nullptr;
+    std::atomic<bool> stop{false};
+
+private:
+    class Lock {
+    public:
+        explicit Lock(SRWLOCK& l) : l_(l) { AcquireSRWLockExclusive(&l_); }
+        ~Lock() { ReleaseSRWLockExclusive(&l_); }
+    private:
+        SRWLOCK& l_;
+    };
+
+    void post(std::vector<std::string>& list, std::string text) {
+        {
+            Lock hold(lock_);
+            keep(list, std::move(text));
+        }
+        SetEvent(wake);
+    }
+
+    // Longer than a packet can carry would stop the lane for good. And with no relay thread running, nobody empties these.
+    static void keep(std::vector<std::string>& list, std::string text) {
+        if (list.size() >= MAX_SURE_PENDING) return;
+        if (text.size() > MAX_TEXT) text.resize(MAX_TEXT);
+        list.push_back(std::move(text));
+    }
+
+    struct Waiting {
+        double arrived_ms;
+        std::string text;
+    };
+
+    SRWLOCK lock_;
+    Outgoing out_;
+    Timeline timeline_;
+    std::string events_, enemies_, status_;
+    std::deque<Waiting> quick_;
+};
+
+inline Mailbox mail;
+
+class Writer {
+public:
+    explicit Writer(std::string& out) : out_(out) {}
+    template <typename T> void put(T v) { out_.append(reinterpret_cast<const char*>(&v), sizeof v); }
+    void text(std::string_view s) {
+        put<uint16_t>(static_cast<uint16_t>(s.size()));
+        out_.append(s);
+    }
+
+private:
+    std::string& out_;
+};
+
+class Reader {
+public:
+    explicit Reader(std::string_view data) : data_(data) {}
+
+    template <typename T> T get() {
+        T v{};
+        if (data_.size() < sizeof v) {
+            ok = false;
+            return v;
+        }
+        std::memcpy(&v, data_.data(), sizeof v);
+        data_.remove_prefix(sizeof v);
+        return v;
+    }
+
+    std::string_view text() {
+        const uint16_t n = get<uint16_t>();
+        if (!ok || data_.size() < n) {
+            ok = false;
+            return {};
+        }
+        std::string_view s = data_.substr(0, n);
+        data_.remove_prefix(n);
+        return s;
+    }
+
+    bool left() const { return ok && !data_.empty(); }
+    bool ok = true;
+
+private:
+    std::string_view data_;
+};
+
+enum Section : uint8_t { SEC_STATE = 1, SEC_SURE = 2, SEC_QUICK = 3, SEC_ENEMY = 4, SEC_HELLO = 5 };
+constexpr uint8_t FLAG_FROM_HOST = 1;
+
+inline void put_sample(Writer& w, const Sample& s) {
+    const auto speed = [](float v) { return static_cast<int16_t>(std::isfinite(v) ? std::clamp(v, -32000.0f, 32000.0f) : 0.0f); };
+    w.put<uint32_t>(s.ms);
+    w.put<float>(s.x);
+    w.put<float>(s.y);
+    w.put<float>(s.z);
+    w.put<float>(s.yaw);
+    w.put<int16_t>(speed(s.vx));
+    w.put<int16_t>(speed(s.vy));
+    w.put<int16_t>(speed(s.vz));
+    w.put<float>(s.hp);
+    w.put<float>(s.max_hp);
+    w.put<uint32_t>(s.map);
+    w.put<uint16_t>(s.flags);
+}
+
+inline Sample get_sample(Reader& r) {
+    Sample s;
+    s.ms = r.get<uint32_t>();
+    s.x = r.get<float>();
+    s.y = r.get<float>();
+    s.z = r.get<float>();
+    s.yaw = r.get<float>();
+    s.vx = r.get<int16_t>();
+    s.vy = r.get<int16_t>();
+    s.vz = r.get<int16_t>();
+    s.hp = r.get<float>();
+    s.max_hp = r.get<float>();
+    s.map = r.get<uint32_t>();
+    s.flags = r.get<uint16_t>();
+    return s;
+}
+
+constexpr size_t SESSIONS_RETIRED = 8;      // the partner's old sessions: their packets can still be on the way...
+constexpr double SESSION_RETIRED_S = 5;     // ...but not after this. One heard later is alive: a corrupt packet took its place
+
+// The sender's clock, always moving on, so a partner can tell a late packet of an older session from a new start (handle).
+// Compared around the 32-bit circle, where half of all stamps have the top bit set: with no last session there's nothing to
+// be older than. A process's first session must come from the clock, or a restarted partner looks like the same one.
+inline uint32_t next_session(uint32_t last, uint64_t wall_ms) {
+    uint32_t stamped = static_cast<uint32_t>(wall_ms);
+    if (last != 0 && static_cast<int32_t>(stamped - last) <= 0) stamped = last + 1;
+    return stamped ? stamped : 1;
+}
 
 class Relay {
 public:
     Relay(std::string role, const std::wstring& dir, std::unique_ptr<Link> link, const std::string* secret,
-          const Ini& ini, const std::string& version, std::function<void(const std::string&)> log)
-        : role_(std::move(role)), link_(std::move(link)), log_(std::move(log)),
-          out_path_(dir + L"\\net_out.txt"), in_path_(dir + L"\\net_in.txt"),
-          events_out_path_(dir + L"\\net_events_out.txt"), inbox_(dir + L"\\net_events_in.txt"),
-          version_(clean_token(version)) {
+          const Ini& ini, const std::string& version, std::function<void(const std::string&)> log, Mailbox& box = mail)
+        : role_(std::move(role)), link_(std::move(link)), log_(std::move(log)), box_(box), version_(clean_token(version)) {
         status_path = dir + L"\\net_status.txt";
         if (secret) auth_ = std::make_unique<Auth>(*secret, role_);
         for (const auto& [key, value] : ini)
-            if (is_shared_setting(key)) settings_[key] = lower(value);
+            if (is_shared_setting(key)) settings_[key] = lower(clean_token(value));
         peer_ = link_->peer;
+        new_session();
     }
 
     void tick(double now) {
         receive_all(now);
-        if (peer_ && last_heard_ > 0 && now - last_heard_ > PEER_TIMEOUT && !in_blanked_) {
-            // The peer is gone: don't leave its last snapshot for the mod to keep applying.
-            write_atomic(in_path_, "");
-            in_player_.clear();
-            in_enemies_.clear();
-            in_blanked_ = true;
-        }
-        if (now - last_ping_ >= PING_EVERY) {
-            char msg[80];
-            std::snprintf(msg, sizeof msg, "{\"t\":\"ping\",\"ts\":%.17g,\"v\":%d}", now, PROTOCOL);
-            if (!peer_ && role_ != "host") {
-                for (const Addr& friend_id : link_->candidates()) send_raw(msg, &friend_id);
-            } else {
-                send_raw(msg);
-            }
-            last_ping_ = now;
-        }
-        if (peer_ && now - last_hello_ >= HELLO_EVERY) {
-            send_hello();
-            last_hello_ = now;
-        }
-        // Resent if nothing went out since the last tick, so a dropped packet heals itself. wait() sends on change,
-        // which is every tick while the mod runs: sending here as well doubled the traffic.
-        if (monotonic() - last_state_ >= TICK) send_state();
+        flush(now);
     }
 
-    // Sleep until the next tick, but handle incoming packets the moment they arrive, and send the mod's snapshot or
-    // events the moment it writes them (checked every WATCH s) instead of on the next tick.
-    void wait(double seconds) {
-        const double deadline = monotonic() + seconds;
-        while (true) {
-            double remaining = deadline - monotonic();
-            if (remaining <= 0) return;
-            if (link_->wait(std::min(remaining, WATCH))) receive_all(monotonic());
-            std::string sig = out_signature();
-            if (sig != out_signature_) {
-                out_signature_ = sig;
-                send_state();
+    void wait() { link_->wait(TICK, box_.wake); }
+
+    // One packet as it came off the wire, signature and all.
+    void on_packet(const Addr& from, const std::string& packet, double now) {
+        // Checked before anything else (before a host takes a sender as its partner): with a secret only validly signed
+        // packets count; without one, signed packets mean the partner set a secret we don't have.
+        if (auth_) {
+            auto opened = auth_->open(packet);
+            if (!opened) {
+                rejected_++;
+                return;
+            }
+            handle(from, *opened, now);
+        } else if (packet.compare(0, 4, Auth::MAGIC, 4) == 0) {
+            rejected_++;
+        } else {
+            handle(from, packet, now);
+        }
+    }
+
+    // Past the signature. Public for the test that sets a packet against unreadable memory, to catch any over-read.
+    void handle(const Addr& addr, std::string_view data, double now) {
+        // A stranger's old-version packet says nothing about the partner.
+        const bool stranger = peer_ && *peer_ != addr && now - last_heard_ <= PEER_TIMEOUT;
+        if (!data.empty() && data[0] == '{') {
+            if (!stranger) partner_version_ = "1.4.1-or-older";     // protocol 2 was JSON
+            return;
+        }
+        Reader r(data);
+        const auto marker = r.get<uint8_t>();
+        const auto protocol = r.get<uint8_t>();
+        if (!r.ok || marker != MARKER) return;
+        if (protocol != PROTOCOL) {
+            if (!stranger) partner_version_ = "other-protocol";
+            return;
+        }
+        const auto flags = r.get<uint8_t>();
+        const auto session = r.get<uint32_t>();
+        const auto their_view = r.get<uint32_t>();
+        const auto sequence = r.get<uint16_t>();
+        const auto their_ms = r.get<uint32_t>();
+        const auto echo = r.get<uint32_t>();
+        const auto hold = r.get<uint16_t>();
+        const auto ack_next = r.get<uint32_t>();
+        const auto ack_bits = r.get<uint32_t>();
+        if (!r.ok || session == 0) return;       // no relay uses session 0: it means "partner not known yet"
+
+        const bool from_host = (flags & FLAG_FROM_HOST) != 0;
+        bool new_sender = false;
+        if (role_ == "host") {
+            if (from_host) return;
+            if (!peer_ || *peer_ != addr) {
+                // Pinned to the first peer: another sender is only taken once the current one went silent.
+                if (peer_ && now - last_heard_ <= PEER_TIMEOUT) return;
+                peer_ = addr;
+                retired_.clear();
+                new_sender = true;
+                log_("peer connected: " + link_->describe(addr));
+            }
+        } else {
+            // A guest still looking for its host pins the first host that answers; other guests are ignored.
+            if (!from_host) return;
+            if (!peer_) {
+                peer_ = addr;
+                log_("found the host: " + link_->describe(addr));
+            } else if (*peer_ != addr) {
+                return;
+            }
+        }
+        // Older than the one we're following, and that one is alive: a straggler, even of a session never seen here (two
+        // resets close together). Silence is the way out, should the partner's clock have been put back. A sender just taken
+        // over isn't on that clock at all, and one that left a made-up session behind mustn't keep the real partner waiting.
+        if (!new_sender && peer_session_ != 0 && static_cast<int32_t>(session - peer_session_) < 0 &&
+            now - last_heard_ <= SESSION_RETIRED_S)
+            return;
+        // A packet of the partner's last session, overtaken on the way by its first of the new one. Taken for a restart it
+        // would put the lanes back on old numbers, and whatever the partner has confirmed since would count as delivered.
+        for (auto it = retired_.begin(); it != retired_.end(); ++it) {
+            if (it->first != session) continue;
+            if (now - it->second <= SESSION_RETIRED_S) return;
+            retired_.erase(it);
+            break;
+        }
+        last_heard_ = now;
+        received_++;
+        if (session != peer_session_) partner_restarted(session, now);
+
+        const uint16_t expected = static_cast<uint16_t>(last_sequence_ + 1);
+        const int16_t gap = static_cast<int16_t>(sequence - expected);
+        if (sequence_known_ && gap > 0 && gap < 1000) lost_ += gap;
+        if (!sequence_known_ || gap >= 0 || gap < -1000) last_sequence_ = sequence;   // far "behind" is a very long silence
+        sequence_known_ = true;
+
+        const double ms = clock_ms();
+        echo_ms_ = their_ms;
+        echo_arrived_ms_ = ms;
+        if (echo) {
+            const double rtt = ms - static_cast<double>(echo) - static_cast<double>(hold);
+            if (rtt >= 0 && rtt < 5000) rtt_ms_ = rtt_ms_ < 0 ? rtt : rtt_ms_ + (rtt - rtt_ms_) * 0.1;
+        }
+        const bool synced = their_view == session_;      // sure and quick numbers only mean something between these two
+        if (synced) sure_out_.on_ack(ack_next, ack_bits);
+
+        while (r.left()) {
+            const auto section = r.get<uint8_t>();
+            if (section == SEC_STATE) {
+                Sample s = get_sample(r);
+                if (r.ok && sane(s.x) && sane(s.y) && sane(s.z) && sane(s.yaw) && sane(s.hp) && sane(s.max_hp))
+                    box_.on_sample(s, ms);
+            } else if (section == SEC_SURE) {
+                const auto id = r.get<uint32_t>();
+                std::string_view text = r.text();
+                if (!r.ok || text.size() > MAX_TEXT) return;
+                if (synced) {
+                    if (ack_wanted_at_ < 0) ack_wanted_at_ = now;
+                    sure_in_.on_event(id, std::string(text), [this](const std::string& t) { return box_.on_event(t); });
+                }
+            } else if (section == SEC_QUICK) {
+                const auto id = r.get<uint32_t>();
+                const auto age = r.get<uint16_t>();
+                std::string_view text = r.text();
+                if (!r.ok || text.size() > MAX_TEXT) return;
+                const double trip = rtt_ms_ < 0 ? 0 : rtt_ms_ / 2;
+                if (synced && quick_in_.fresh(id) && age + trip <= QUICK_REPLAY_MS) box_.on_quick(text, ms);
+            } else if (section == SEC_ENEMY) {
+                std::string_view text = r.text();
+                if (!r.ok || text.size() > MAX_TEXT) return;
+                box_.on_enemies(text);
+            } else if (section == SEC_HELLO) {
+                std::string_view text = r.text();
+                if (!r.ok) return;
+                on_hello(std::string(text));
+            } else {
+                return;
             }
         }
     }
@@ -539,22 +898,32 @@ public:
             peer = link_->describe(*peer_);
             std::replace(peer.begin(), peer.end(), ' ', '_');
         }
-        std::string rtt = "-";
-        if (rtt_ms_) {
-            char s[32];
-            std::snprintf(s, sizeof s, "%.0f", *rtt_ms_);
-            rtt = s;
-        }
+        char rtt[32] = "-";
+        if (rtt_ms_ >= 0) std::snprintf(rtt, sizeof rtt, "%.0f", rtt_ms_);
         std::string mismatch;
         for (const auto& k : mismatch_) mismatch += (mismatch.empty() ? "" : ",") + k;
+        const long long got = received_ - received_mark_, lost = lost_ - lost_mark_;
+        const double loss = got + lost > 0 ? 100.0 * lost / static_cast<double>(got + lost) : 0;
+        received_mark_ = received_;
+        lost_mark_ = lost_;
+        double jitter = 0, delay = 0;
+        box_.link_numbers(jitter, delay);
+        char quality[96];
+        std::snprintf(quality, sizeof quality, " jitter_ms=%.1f delay_ms=%.1f loss_pct=%.1f resent=%lld pending=%zu", jitter,
+                      delay, loss, sure_out_.resent, sure_out_.pending());
+        const Link::Route route = peer_ ? link_->route(*peer_) : Link::Route{};
         // time= (wall clock) lets the mod tell a running relay from a stale status file before starting another.
         return "role=" + role_ + " via=" + link_->via() + " connected=" + (connected ? "yes" : "no") + " peer=" + peer +
-               " rtt_ms=" + rtt + " sent=" + std::to_string(sent_) + " received=" + std::to_string(received_) +
+               " rtt_ms=" + rtt + " route=" + route.kind +
+               " route_ping_ms=" + (route.ping_ms < 0 ? "-" : std::to_string(route.ping_ms)) +
+               " sent=" + std::to_string(sent_) + " received=" + std::to_string(received_) +
                " filtered=" + std::to_string(link_->filtered) + " rejected=" + std::to_string(rejected_) +
                " auth=" + (auth_ ? "on" : "off") + " version=" + version_ +
                " partner_version=" + (partner_version_.empty() ? "-" : partner_version_) +
-               " mismatch=" + (mismatch.empty() ? "-" : mismatch) + " events_acked=" + std::to_string(events_acked_) +
-               " events_in=" + std::to_string(inbox_.last_id) + " time=" + std::to_string(static_cast<long long>(std::time(nullptr)));
+               " partner_map=" + (partner_map_.empty() ? "-" : partner_map_) +
+               " mismatch=" + (mismatch.empty() ? "-" : mismatch) + " events_acked=" + std::to_string(sure_out_.acked) +
+               " events_in=" + std::to_string(sure_in_.count) + quality +
+               " time=" + std::to_string(static_cast<long long>(std::time(nullptr)));
     }
 
     std::string describe_self() { return link_->describe_self(); }
@@ -562,210 +931,205 @@ public:
     std::wstring status_path;
 
 private:
-    void send_raw(const std::string& msg, const Addr* to = nullptr) {
+    void new_session() {
+        static uint32_t last = 0;
+        last = next_session(last, static_cast<uint64_t>(wall_seconds() * 1000));
+        session_ = last;
+        sure_out_ = SureSender();
+        quick_out_.restart();
+        enemy_out_.clear();
+        sure_in_.restart();
+        quick_in_.restart();
+        sequence_known_ = false;
+    }
+
+    void start_packet(std::string& p) {
+        const double ms = clock_ms();
+        p.clear();
+        Writer w(p);
+        w.put<uint8_t>(MARKER);
+        w.put<uint8_t>(PROTOCOL);
+        w.put<uint8_t>(role_ == "host" ? FLAG_FROM_HOST : 0);
+        w.put<uint32_t>(session_);
+        w.put<uint32_t>(peer_session_);
+        w.put<uint16_t>(sequence_);
+        w.put<uint32_t>(static_cast<uint32_t>(ms));
+        w.put<uint32_t>(echo_ms_);
+        w.put<uint16_t>(static_cast<uint16_t>(std::min(65000.0, echo_ms_ ? ms - echo_arrived_ms_ : 0.0)));
+        w.put<uint32_t>(sure_in_.next());
+        w.put<uint32_t>(sure_in_.bits());
+        header_bytes_ = p.size();
+    }
+
+    void send_packet(const std::string& p, double now, const Addr* to = nullptr) {
         const Addr* target = to ? to : (peer_ ? &*peer_ : nullptr);
         if (!target) return;
-        link_->send(*target, auth_ ? auth_->seal(msg) : msg);
+        link_->send(*target, auth_ ? auth_->seal(p) : p);
         sent_++;
+        sequence_++;
+        last_send_ = now;
+        ack_wanted_at_ = -1;
     }
 
-    void send_hello() {
-        std::string msg = "{\"t\":\"hello\",\"ver\":";
-        json::append_string(msg, version_);
-        msg += ",\"cfg\":{";
-        bool first = true;
-        for (const auto& [key, value] : settings_) {
-            if (!first) msg.push_back(',');
-            first = false;
-            json::append_string(msg, key);
-            msg.push_back(':');
-            json::append_string(msg, value);
-        }
-        msg += "},\"v\":" + std::to_string(PROTOCOL) + "}";
-        send_raw(msg);
+    double retry_s() const {
+        return rtt_ms_ < 0 ? 0.2 : std::clamp(rtt_ms_ * 0.0015 + 0.015, RETRY_MIN, RETRY_MAX);
     }
 
-    void send_snapshot_part(const char* key, const std::string& text) {
-        std::string msg = std::string("{\"t\":\"state\",\"") + key + "\":";
-        json::append_string(msg, text);
-        msg += ",\"v\":" + std::to_string(PROTOCOL) + "}";
-        send_raw(msg);
+    std::string hello_text() const {
+        std::string text = version_ + "\n" + map_name_.substr(0, 64) + "\n";
+        for (const auto& [key, value] : settings_) text += key + "=" + value + "\n";
+        return text;
     }
 
-    void send_state() {
-        const double now = monotonic();
-        last_state_ = now;
-        // Events first: a dead enemy's "K" should arrive before the enemy list that no longer has it.
-        ParsedEvents parsed = parse_events(read_complete_lines(events_out_path_));
-        if (parsed.session) {
-            auto it = acked_.find(*parsed.session);
-            long long acked = it == acked_.end() ? 0 : it->second;
-            std::string lines;
-            size_t count = 0, size = 0;
-            for (const auto& [id, line] : parsed.events) {
-                if (id <= acked) continue;
-                if (count && (count == MAX_EVENTS_PER_PACKET || size + line.size() > MAX_EVENT_BYTES)) break;
-                if (count++) lines.push_back(',');
-                json::append_string(lines, line);
-                size += line.size();
-            }
-            // The session is repeated even with nothing pending, so the peer's inbox follows restarts.
-            if (count || now - last_session_ >= SESSION_EVERY) {
-                std::string msg = "{\"t\":\"state\",\"e\":{\"sid\":";
-                json::append_string(msg, *parsed.session);
-                msg += ",\"l\":[" + lines + "]},\"v\":" + std::to_string(PROTOCOL) + "}";
-                send_raw(msg);
-                last_session_ = now;
-            }
-            events_acked_ = acked;
+    void flush(double now) {
+        Mailbox::Outgoing out;
+        box_.take_outgoing(out);
+        if (out.reset) new_session();
+        if (out.map_changed) {
+            map_name_ = std::move(out.map);
+            hello_due_ = true;
         }
-        std::string snapshot = read_text(out_path_);
-        if (!strip(snapshot).empty()) {
-            if (snapshot.size() > MAX_SNAPSHOT_BYTES) snapshot.resize(MAX_SNAPSHOT_BYTES);
-            std::string player, enemies;
-            for (size_t at = 0; at < snapshot.size();) {
-                size_t end = snapshot.find('\n', at);
-                end = end == std::string::npos ? snapshot.size() : end + 1;
-                (snapshot.compare(at, 2, "E ") == 0 ? enemies : player).append(snapshot, at, end - at);
-                at = end;
-            }
-            send_snapshot_part("s", player);
-            if ((!enemies.empty() || enemies_sent_) && now - last_enemies_ >= ENEMY_EVERY) {
-                send_snapshot_part("n", enemies);
-                last_enemies_ = now;
-                enemies_sent_ = !enemies.empty();
-            }
+        for (auto& text : out.sure) sure_out_.push(std::move(text));
+        for (auto& text : out.quick) quick_out_.push(std::move(text), now);
+        for (auto& text : out.enemies) enemy_out_.push_back(std::move(text));
+        while (enemy_out_.size() > MAX_ENEMY_LINES) enemy_out_.pop_front();
+        quick_out_.expire(now);
+
+        const bool partner_here = now - last_heard_ <= PEER_TIMEOUT;
+        // Sure events were lost for good while the partner was away, and numbers can't bridge a hole: a new session makes
+        // it hear S, this side hears S too, and each tells the other again what it needs to know.
+        if (sure_out_.overflowed && peer_session_ != 0 && partner_here) {
+            new_session();
+            box_.on_partner_restart();
         }
+
+        if (!peer_) {
+            if (role_ != "host" && now - last_probe_ >= PROBE_EVERY) {
+                last_probe_ = now;
+                std::string p;
+                start_packet(p);
+                for (const Addr& friend_id : link_->candidates()) send_packet(p, now, &friend_id);
+            }
+            return;
+        }
+        if (now - last_hello_ >= HELLO_EVERY) hello_due_ = true;
+
+        std::string p;
+        start_packet(p);
+        int packets = 1;
+        // Room for n more bytes, starting another packet if this one is full. False once this round's limit is reached.
+        auto room = [&](size_t n) {
+            if (p.size() + n <= MAX_PACKET) return true;
+            if (packets == MAX_PACKETS_AT_ONCE) return false;
+            packets++;
+            send_packet(p, now);
+            start_packet(p);
+            return true;
+        };
+        Writer w(p);
+        if (out.have_sample) {
+            w.put<uint8_t>(SEC_STATE);
+            put_sample(w, out.sample);
+        }
+        if (hello_due_) {
+            hello_due_ = false;
+            last_hello_ = now;
+            w.put<uint8_t>(SEC_HELLO);
+            w.text(hello_text());
+        }
+        // Sure lane first: it's what must not wait behind anything. With nobody answering they wait here, not on the wire:
+        // a long queue resent forever at an empty address is megabytes a second.
+        if (peer_session_ != 0 && partner_here) {
+            sure_out_.for_each_due(now, retry_s(), [&](const SureSender::Item& item) {
+                if (!room(1 + 4 + 2 + item.text.size())) return false;
+                w.put<uint8_t>(SEC_SURE);
+                w.put<uint32_t>(item.id);
+                w.text(item.text);
+                return true;
+            });
+        }
+        quick_out_.for_each(now, QUICK_GAP, [&](const QuickSender::Item& item, double age) {
+            if (!room(1 + 4 + 2 + 2 + item.text.size())) return false;
+            w.put<uint8_t>(SEC_QUICK);
+            w.put<uint32_t>(item.id);
+            w.put<uint16_t>(static_cast<uint16_t>(age * 1000));
+            w.text(item.text);
+            return true;
+        });
+        while (!enemy_out_.empty() && room(1 + 2 + enemy_out_.front().size())) {
+            w.put<uint8_t>(SEC_ENEMY);
+            w.text(enemy_out_.front());
+            enemy_out_.pop_front();
+        }
+        const bool ack_late = ack_wanted_at_ >= 0 && now - ack_wanted_at_ >= ACK_WAIT;
+        if (p.size() > header_bytes_ || ack_late || now - last_send_ >= KEEPALIVE_EVERY) send_packet(p, now);
     }
 
     void receive_all(double now) {
-        for (auto& [addr, packet] : link_->receive()) {
-            // Checked before anything else (before a host takes a sender as its partner): with a secret only validly
-            // signed packets count; without one, signed packets mean the partner set a secret we don't have.
-            std::string data;
-            if (auth_) {
-                auto opened = auth_->open(packet);
-                if (!opened) {
-                    rejected_++;
-                    continue;
-                }
-                data = std::move(*opened);
-            } else if (packet.compare(0, 4, Auth::MAGIC, 4) == 0) {
-                rejected_++;
-                continue;
-            } else {
-                data = std::move(packet);
-            }
-            json::Value msg;
-            if (!json::Parser(data).parse(msg) || msg.type != json::Value::Object) continue;
-            const json::Value* v = msg.get("v");
-            if (!v || v->type != json::Value::Number || v->number != PROTOCOL) continue;
-            const std::string* kind = msg.get_string("t");
-            if (role_ == "host" && (!peer_ || *peer_ != addr)) {
-                // Pinned to the first peer: another sender is only taken once the current one went silent.
-                if (peer_ && now - last_heard_ <= PEER_TIMEOUT) continue;
-                peer_ = addr;
-                log_("peer connected: " + link_->describe(addr));
-            } else if (role_ != "host" && (!peer_ || *peer_ != addr)) {
-                // A guest still looking for its host pins the first friend that answers a ping; it never answers
-                // other guests' pings itself.
-                if (peer_ || !kind || *kind != "pong") continue;
-                peer_ = addr;
-                log_("found the host: " + link_->describe(addr));
-            }
-            last_heard_ = now;
-            received_++;
-            if (!kind) continue;
-            if (*kind == "ping") {
-                const json::Value* ts = msg.get("ts");
-                char reply[80];
-                if (ts && ts->type == json::Value::Number && std::isfinite(ts->number))
-                    std::snprintf(reply, sizeof reply, "{\"t\":\"pong\",\"ts\":%.17g,\"v\":%d}", ts->number, PROTOCOL);
-                else
-                    std::snprintf(reply, sizeof reply, "{\"t\":\"pong\",\"ts\":null,\"v\":%d}", PROTOCOL);
-                send_raw(reply);
-            } else if (*kind == "pong") {
-                const json::Value* ts = msg.get("ts");
-                if (ts && ts->type == json::Value::Number && std::fabs(ts->number) < 1e12)
-                    rtt_ms_ = (now - ts->number) * 1000.0;
-            } else if (*kind == "state") {
-                const std::string* s = msg.get_string("s");
-                const std::string* n = msg.get_string("n");
-                if (s || n) {
-                    if (s) in_player_ = *s;
-                    if (n) in_enemies_ = *n;
-                    write_atomic(in_path_, in_player_ + in_enemies_);
-                    in_blanked_ = false;
-                }
-                const json::Value* ev = msg.get("e");
-                const std::string* sid = ev && ev->type == json::Value::Object ? ev->get_string("sid") : nullptr;
-                const json::Value* lines = ev && ev->type == json::Value::Object ? ev->get("l") : nullptr;
-                if (sid && lines && lines->type == json::Value::Array) {
-                    std::string text;
-                    for (const auto& line : lines->items)
-                        if (line.type == json::Value::String) text += line.text + "\n";
-                    long long last = inbox_.accept(*sid, parse_events(text).events);
-                    std::string ack = "{\"t\":\"ack\",\"sid\":";
-                    json::append_string(ack, *sid);
-                    ack += ",\"id\":" + std::to_string(last) + ",\"v\":" + std::to_string(PROTOCOL) + "}";
-                    send_raw(ack);
-                }
-            } else if (*kind == "ack") {
-                const std::string* sid = msg.get_string("sid");
-                const json::Value* id = msg.get("id");
-                if (sid && id && id->type == json::Value::Number && id->integer) {
-                    // Taken as is, even when lower: a restarted peer relay starts its inbox over and acks 0, and
-                    // only then do we resend the events it lost.
-                    if (acked_.size() >= MAX_ACKED_SESSIONS && !acked_.count(*sid)) acked_.clear();
-                    acked_[*sid] = static_cast<long long>(id->number);
-                }
-            } else if (*kind == "hello") {
-                const json::Value* cfg = msg.get("cfg");
-                if (cfg && cfg->type == json::Value::Object) {
-                    const std::string* ver = msg.get_string("ver");
-                    partner_version_ = clean_token(ver ? *ver : "");
-                    mismatch_.clear();
-                    for (const auto& [key, value] : settings_) {
-                        const json::Value* theirs = cfg->get(key.c_str());
-                        if (theirs && theirs->type == json::Value::String && lower(clean_token(theirs->text)) != value)
-                            mismatch_.push_back(key);
-                    }
-                }
-            }
-        }
+        for (auto& [addr, packet] : link_->receive()) on_packet(addr, packet, now);
     }
 
-    std::string out_signature() {
-        std::string sig;
-        for (const std::wstring* path : {&out_path_, &events_out_path_}) {
-            WIN32_FILE_ATTRIBUTE_DATA info;
-            if (GetFileAttributesExW(path->c_str(), GetFileExInfoStandard, &info)) {
-                sig.append(reinterpret_cast<const char*>(&info.ftLastWriteTime), sizeof info.ftLastWriteTime);
-                sig.append(reinterpret_cast<const char*>(&info.nFileSizeLow), sizeof info.nFileSizeLow);
-            }
-            sig.push_back('|');
+    // The other side started, or turned sync on again: nothing either of us numbered before means anything now.
+    void partner_restarted(uint32_t session, double now) {
+        if (peer_session_ != 0) retired_.emplace_back(peer_session_, now);
+        if (retired_.size() > SESSIONS_RETIRED) retired_.erase(retired_.begin());
+        peer_session_ = session;
+        sure_in_.restart();
+        quick_in_.restart();
+        sure_out_.forget();
+        sequence_known_ = false;
+        box_.on_partner_restart();
+        hello_due_ = true;
+    }
+
+    // Past this a float stops being a place or a health bar, and sums on it stop being finite.
+    static bool sane(float v) { return std::isfinite(v) && std::fabs(v) < 1e9f; }
+
+    void on_hello(const std::string& text) {
+        std::vector<std::string> lines;
+        for (size_t at = 0; at < text.size();) {
+            size_t end = text.find('\n', at);
+            if (end == std::string::npos) end = text.size();
+            lines.push_back(text.substr(at, end - at));
+            at = end + 1;
         }
-        return sig;
+        if (lines.size() < 2) return;
+        partner_version_ = clean_token(lines[0]);
+        partner_map_ = clean_token(lines[1], 64);
+        mismatch_.clear();
+        for (size_t i = 2; i < lines.size(); i++) {
+            size_t eq = lines[i].find('=');
+            if (eq == std::string::npos) continue;
+            auto mine = settings_.find(lines[i].substr(0, eq));
+            // Both values went through the same cleaning, or "1 000" would differ from itself on the two PCs.
+            if (mine != settings_.end() && lower(clean_token(lines[i].substr(eq + 1))) != mine->second)
+                mismatch_.push_back(mine->first);
+        }
     }
 
     std::string role_;
     std::unique_ptr<Link> link_;
     std::function<void(const std::string&)> log_;
-    std::wstring out_path_, in_path_, events_out_path_;
-    EventInbox inbox_;
+    Mailbox& box_;
     std::unique_ptr<Auth> auth_;
     std::map<std::string, std::string> settings_;
-    std::string version_, partner_version_, out_signature_;
+    std::string version_, partner_version_, partner_map_, map_name_;
     std::vector<std::string> mismatch_;
     std::optional<Addr> peer_;     // host: learned from the first packet; Steam guest: maybe found later
-    std::map<std::string, long long> acked_;   // our session -> highest event id the peer confirmed
-    std::optional<double> rtt_ms_;
-    double last_hello_ = 0, last_heard_ = 0, last_ping_ = 0;
-    long long rejected_ = 0, received_ = 0, sent_ = 0, events_acked_ = 0;
-    bool in_blanked_ = false;
-    std::string in_player_, in_enemies_;   // the peer's latest position lines and enemy lines
-    double last_state_ = 0, last_enemies_ = 0, last_session_ = 0;
-    bool enemies_sent_ = false;            // the last enemy packet had enemies: an empty list must follow them
+    uint32_t session_ = 0, peer_session_ = 0;
+    std::vector<std::pair<uint32_t, double>> retired_;   // oldest first: session, when it was replaced
+    SureSender sure_out_;
+    SureReceiver sure_in_;
+    QuickSender quick_out_;
+    QuickReceiver quick_in_;
+    std::deque<std::string> enemy_out_;
+    uint16_t sequence_ = 0, last_sequence_ = 0;
+    bool sequence_known_ = false, hello_due_ = true;
+    uint32_t echo_ms_ = 0;
+    double echo_arrived_ms_ = 0, rtt_ms_ = -1;
+    size_t header_bytes_ = 0;
+    double last_send_ = 0, last_heard_ = 0, last_hello_ = 0, last_probe_ = -1e9, ack_wanted_at_ = -1;
+    long long rejected_ = 0, received_ = 0, sent_ = 0, lost_ = 0, received_mark_ = 0, lost_mark_ = 0;
 };
 
 struct Options {
@@ -774,31 +1138,22 @@ struct Options {
     std::string peer;              // client: the host's address; Steam: a name or id, or nothing
     std::string transport = "udp";
     bool allow_any = false;
+    bool this_pc_only = false;     // tests: two copies on one PC, nothing for Windows' firewall to ask about
     std::wstring ini;
     std::string version = "?";
     int port = 47800;
-    double seconds = 0;            // 0 = until the heartbeat stops
-    std::wstring alive_file;
-    double alive_timeout = ALIVE_TIMEOUT;
+    double seconds = 0;            // 0 = for the life of the game
 };
-
-// The mod rewrites its heartbeat file (a unix time) every few seconds while the game runs. It truncates, then
-// writes: an empty or unreadable file is a write in progress, not a stop.
-inline bool game_alive(const std::wstring& path, double timeout) {
-    std::string text = strip(read_text(path));
-    char* end = nullptr;
-    double beat = std::strtod(text.c_str(), &end);
-    if (text.empty() || *end != '\0') return true;
-    return wall_seconds() - beat <= timeout;
-}
 
 std::unique_ptr<Link> make_steam_link(const std::string& role, const std::string& peer);
 
-// Runs until the heartbeat stops. A failure leaves relay_error.txt next to the status, since nobody watches a console
-// inside the game.
+// Runs until the player leaves (Mailbox::ask_stop), at most for the life of the game: it lives in the game's own process,
+// so it can't outlive it. A failure leaves relay_error.txt next to the status, since nobody watches a console inside the game.
 inline void run(Options o, const std::function<void(const std::string&)>& log) {
     const std::wstring status_path = o.dir + L"\\net_status.txt";
-    timeBeginPeriod(1);    // Windows sleeps in ~15.6 ms steps by default, too coarse for WATCH
+    timeBeginPeriod(1);    // Windows sleeps in ~15.6 ms steps by default, too coarse for TICK
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);   // every core may be busy with the game
+    std::string failure;
     try {
         Ini ini = o.ini.empty() ? Ini{} : read_ini(o.ini);
         auto any = ini.find("allowanyaddress");
@@ -807,6 +1162,7 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
             // A virtual LAN with unusual addresses (UU Accelerator's multiplayer, ZeroTier...): the player opened it.
             if (v == "on" || v == "yes" || v == "true" || v == "1") o.allow_any = true;
         }
+        if (lower(ini["thispconly"]) == "on") o.this_pc_only = true;
         std::string secret;
         if (auto it = ini.find("secret"); it != ini.end()) secret = it->second;
         std::string secret_lower = lower(secret);
@@ -814,33 +1170,39 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
                                 secret_lower == "none");
         std::unique_ptr<Link> link;
         if (o.transport == "steam") link = make_steam_link(o.role, o.peer);
-        else link = std::make_unique<UdpLink>(o.role, o.peer, o.port, o.allow_any);
+        else link = std::make_unique<UdpLink>(o.role, o.peer, o.port, o.allow_any, o.this_pc_only);
         Relay relay(o.role, o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
         log("PBZCoop relay " + o.role + " on " + relay.describe_self() + (signed_packets ? ", packets signed (Secret set)" : ""));
         const double start = monotonic();
         double last_status = 0;
-        while (true) {
+        while (!mail.stop) {
             double now = monotonic();
             relay.tick(now);
             if (now - last_status >= 1.0) {
                 std::string line = relay.status(now);
+                mail.set_status(line);
                 write_atomic(status_path, line + "\n");
                 log(line);
                 last_status = now;
             }
             if (o.seconds > 0 && now - start >= o.seconds) break;
-            if (!o.alive_file.empty() && !game_alive(o.alive_file, o.alive_timeout)) {
-                log("the game's heartbeat stopped: game closed, relay exiting");
-                break;
-            }
-            relay.wait(TICK);
+            relay.wait();
         }
     } catch (const std::exception& e) {
-        write_atomic(o.dir + L"\\relay_error.txt", std::string(e.what()) + "\n");
-        log(std::string("relay failed: ") + e.what());
+        failure = e.what();
+        write_atomic(o.dir + L"\\relay_error.txt", failure + "\n");
+        log("relay failed: " + failure);
     }
     timeEndPeriod(1);
-    write_atomic(status_path, "role=" + o.role + " connected=no stopped=yes\n");
+    // error= comes last and may hold spaces: status.lua shows it to the player.
+    const std::string stopped = "role=" + o.role + " connected=no stopped=yes" + (failure.empty() ? "" : " error=" + failure);
+    write_atomic(status_path, stopped + "\n");
+    if (o.seconds > 0) return;     // a timed run (the tests): its caller still reads the last status
+    // The socket is closed (relay and link ended with the try) and this thread goes back to waiting for a start file:
+    // nothing of this run may reach the next one, which can be another role.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    mail.reset();
+    mail.set_status(stopped);
 }
 
 }  // namespace relay

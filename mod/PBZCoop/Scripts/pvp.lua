@@ -235,6 +235,7 @@ return function(api)
         end
 
         if hostileGhost ~= ghost:GetAddress() then
+            game.shieldGhost(ghost, false)        -- in a duel the ghost must take real hits
             giveGhostStats(ghost, pawn)
             if setHostile(pawn, ghost, true) then
                 hostileGhost = ghost:GetAddress()
@@ -296,6 +297,7 @@ return function(api)
                     if game.setupGhost then
                         game.setupGhost(net.ghost)       -- harmless again
                     end
+                    game.shieldGhost(net.ghost, true)    -- and out of the enemies' reach
                 end
             end
             hostileGhost = nil

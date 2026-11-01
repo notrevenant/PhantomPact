@@ -1,10 +1,10 @@
--- In-game connection status: the relay's net_status.txt turned into short tips at the bottom of the screen, in the
+-- In-game connection status: the relay's status line turned into short tips at the bottom of the screen, in the
 -- game's own ink-bar tip widget (WB_TipsText, the one behind "This door doesn't open from this side").
 -- (From appdoze's PR #2; the tip is re-created after map travel, which removes it from the screen.)
 --
 -- Shown when something changes: partner connected / lost, settings that differ between the two PCs (the relays'
--- hello exchange), packets refused because the Secrets differ, a lasting high ping, and an untested game build.
--- Also keeps net.rttMs for the ghost's prediction (coop.lua).
+-- hello exchange), packets refused because the Secrets differ, a lasting high ping, Steam staying on its relays, and an
+-- untested game build. Also keeps net.rttMs for the ghost's prediction (coop.lua).
 
 return function(api)
     local log, valid, game = api.log, api.valid, api.game
@@ -15,10 +15,14 @@ return function(api)
     local SHOW_S = 4.0              -- how long a tip stays
     local HIGH_PING_MS = 250        -- warn when the round trip stays above this...
     local HIGH_PING_FOR = 5         -- ...for this many reads in a row
+    local RELAYED_FOR = 30          -- reads in a row before saying Steam relays: it can start there, then go direct
     local REPEAT_S = 60             -- the same warning at most once a minute
+    local GUEST_ALONE_S = 20        -- a guest that has heard nothing for this long is told what to check
+    local HOST_ALONE_S = 90         -- a host, the same, once: it may just be waiting for a friend
     local TIP_CLASS = "/Game/PBZContent/UI/InGame/SwitchUI/WB_TipsText.WB_TipsText_C"
 
-    local status = { on = true, last = {}, lastShown = {}, highPingReads = 0, buildShown = false }
+    local status = { on = true, last = {}, lastShown = {}, highPingReads = 0, relayedReads = 0, relayShown = false,
+        buildShown = false }
     local nextPoll = 0
     local tip
 
@@ -88,17 +92,40 @@ return function(api)
     end
 
     local function readStatus()
-        local f = io.open(api.modDir() .. "net_status.txt", "r")
-        if not f then
+        local text = api.link and api.link.status()
+        if text == nil then
             return nil
         end
-        local text = f:read("a") or ""
-        f:close()
         local kv = {}
         for k, v in text:gmatch("([%w_]+)=(%S+)") do
             kv[k] = v
         end
+        kv.error = text:match(" error=(.*)$")     -- the relay's own words, spaces and all
         return kv
+    end
+
+    -- Silence is all a wrong address, a Secret refused on the other PC, or two Hosts or two Guests ever show: neither side
+    -- hears a thing, so the wait itself is what gets reported.
+    local function reportSilence(s)
+        if s.connected == "yes" then
+            status.heard = true
+            return
+        end
+        if status.heard or s.stopped or tonumber(s.rejected or 0) > 0 or (s.partner_version or "-") ~= "-" then
+            return
+        end
+        local now = os.clock()
+        status.aloneSince = status.aloneSince or now
+        local waited = now - status.aloneSince
+        if s.role == "client" and waited >= GUEST_ALONE_S then
+            local steam = s.via == "steam"
+            notify("alone", (steam and "no friend hosting found. Your partner needs Role = Host and Connect = Steam, and the same "
+                or ("no answer from the host (" .. tostring(s.peer) .. "). Check HostAddress and Port, that they're "
+                    .. "in the game on Role = Host, and the same ")) .. "Secret and Phantom Pact version on both PCs.")
+        elseif s.role == "host" and waited >= HOST_ALONE_S and not status.hostTold then
+            status.hostTold = true
+            notify("alone", "nobody has joined yet. Your partner needs Role = Guest and your address: two Hosts never find each other.")
+        end
     end
 
     local function poll()
@@ -108,6 +135,14 @@ return function(api)
         end
         local last = status.last
         net.rttMs = tonumber(s.rtt_ms)
+        if last.role == nil then
+            status.heard, status.aloneSince, status.hostTold = nil, nil, nil    -- a new start (the panel's Join): all to wait for
+        end
+
+        if s.error and s.error ~= last.error then
+            notify("relay", "co-op couldn't start: " .. s.error)
+        end
+        reportSilence(s)
 
         if s.connected == "yes" and last.connected ~= "yes" then
             notify("conn", "partner connected" .. (net.rttMs and string.format(" (ping %d ms)", net.rttMs) or "")
@@ -123,23 +158,40 @@ return function(api)
         local theirs = s.partner_version
         if theirs and theirs ~= "?" and theirs ~= "-" and theirs ~= "" and api.version and theirs ~= api.version
             and theirs ~= last.partner_version then
-            notify("version", "your partner is on Phantom Pact " .. theirs .. " and you're on " .. api.version
-                .. ": use the same version, or enemies won't stay in step.")
+            if theirs == "1.4.1-or-older" or theirs == "other-protocol" then
+                notify("version", "your partner's Phantom Pact (" .. theirs .. ") can't connect to " .. api.version
+                    .. ": both PCs need the same version.")
+            else
+                notify("version", "your partner is on Phantom Pact " .. theirs .. " and you're on " .. api.version
+                    .. ": use the same version, or enemies won't stay in step.")
+            end
         end
 
         local rejected = tonumber(s.rejected) or 0
         if rejected > (tonumber(last.rejected) or 0) and s.connected ~= "yes" then
-            notify("secret", "packets refused: both PCs need the same Secret in PhantomPact.ini (or both none).")
+            notify("secret", "packets refused: both PCs need the same Secret in PhantomPact.ini (or both none), and "
+                .. "their clocks within two minutes of each other.")
         end
 
         if net.rttMs and net.rttMs > HIGH_PING_MS then
             status.highPingReads = status.highPingReads + 1
             if status.highPingReads == HIGH_PING_FOR then
-                notify("ping", string.format("high ping (%d ms). On Tailscale, run \"tailscale ping\": via DERP "
-                    .. "means relayed.", net.rttMs))
+                notify("ping", string.format("high ping (%d ms).", net.rttMs) .. (s.via == "steam" and ""
+                    or " On Tailscale, run \"tailscale ping\": via DERP means relayed."))
             end
         else
             status.highPingReads = 0
+        end
+
+        if s.route == "relay" then
+            status.relayedReads = status.relayedReads + 1
+            if status.relayedReads == RELAYED_FOR and not status.relayShown then
+                status.relayShown = true        -- once a game: it's advice, and nothing changes it mid-fight
+                notify("route", "Steam is relaying this connection, which adds delay. A direct one needs "
+                    .. "SteamDirect = On on both PCs and routers that allow it.")
+            end
+        else
+            status.relayedReads = 0
         end
         status.last = s
     end

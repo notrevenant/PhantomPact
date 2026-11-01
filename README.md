@@ -37,9 +37,14 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 2. Extract the release zip into the game's `PBZ` folder.
 3. In `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`: host sets `Role = Host`, guest sets `HostAddress` to
    the host's Tailscale IP.
-4. Start the game and load your saves, the host first. Co-op starts by itself.
+4. Start the game and load your saves, the host first. Co-op starts by itself. (In testing: with `OnlinePanel = On`
+   in the ini, F4 opens a panel to host, join or leave with no restart.)
 
 Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
+
+Both players must use the same version: 1.4.2 has a new connection, and 1.4.1 or older can't connect to it. No Python
+needed: the connection runs inside the game. Can't connect, or it feels laggy? See Connection problems in
+[INSTALL.md](INSTALL.md#connection-problems).
 
 For two players on one PC, set `Role = Local` instead and plug in two pads: see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
 
@@ -54,17 +59,16 @@ For two players on one PC, set `Role = Local` instead and plug in two pads: see 
 
 | Path | What it is |
 |---|---|
-| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `localcoop.lua` (split screen: player 2's controls, interactions, enemies), `panel.lua` (F4 panel), `autostart.lua` (reads `PhantomPact.ini`, starts the relay, turns sync on), `main.lua` (loader, commands) |
-| [native/](native/) | The relay players run: C++, loaded by UE4SS as `dlls\main.dll` inside the game. Build with `tools\build-native.ps1` (Visual Studio 2022) |
-| [net/pbzcoop_net.py](net/pbzcoop_net.py) | The same relay in Python, with the same packets and files: the fallback if the DLL isn't running, plus echo and record/replay for testing |
-| [net/test_pbzcoop_net.py](net/test_pbzcoop_net.py) | Relay tests: `python -I net\test_pbzcoop_net.py`; set `PBZCOOP_NATIVE_RELAY` to `native\build\relay_cli.exe` to test the C++ relay, against itself or the Python one |
-| [net/pbzcoop_bot.py](net/pbzcoop_bot.py) | Bot partner for live tests without a second PC |
-| [tools/pbz-coop.ps1](tools/pbz-coop.ps1) | Developer launcher: relay + `neton` by hand (`-Role host/client/echo/loop/record/replay`, `-Stop`) |
+| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `localcoop.lua` (split screen: player 2's controls, interactions, enemies), `panel.lua` (local co-op F4 panel), `onlinepanel.lua` (online F4 panel: host, join, leave), `autostart.lua` (reads `PhantomPact.ini`, starts the relay, turns sync on), `main.lua` (loader, commands) |
+| [native/](native/) | The relay: C++, loaded by UE4SS as `dlls\main.dll` inside the game. Build with `tools\build-native.ps1` (Visual Studio 2022). `native\build\relay_cli.exe test` runs its tests; `relay_cli.exe` is never shipped |
+| [tools/netlab/](tools/netlab/) | Online co-op test bench: relay tests through a bad connection, and real game copies from a separate install ([README](tools/netlab/README.md)) |
 | [tools/install-mod.ps1](tools/install-mod.ps1) | Installs the mod into the game's UE4SS `Mods` folder (finds the game through Steam) |
-| [tools/pbz-e2e.ps1](tools/pbz-e2e.ps1) | End-to-end test: two copies of the game on one PC, PASS/FAIL per feature; `-Auto` tests the player setup (ini, self-started relays) |
-| [tools/pbz-selftest.ps1](tools/pbz-selftest.ps1) | Starts two copies with `-allowmultipleinstances` plus relays; `-Stop` |
+| [tools/pbz-e2e.ps1](tools/pbz-e2e.ps1) | End-to-end test: two copies of the game on one PC, PASS/FAIL per feature. Each copy's ini starts its relay, as for players |
+| [tools/pbz-selftest.ps1](tools/pbz-selftest.ps1) | Starts two copies with `-allowmultipleinstances`, each with an ini for its role; `-Connect Udp\|Steam`, `-Cuttable`, `-Stop` |
 | [tools/make-release.ps1](tools/make-release.ps1) | Builds `dist\PhantomPact-<version>.zip` |
-| [docs/COOP_GUIDE.md](docs/COOP_GUIDE.md) | What syncs and how: protocol, enemy matching, tests and results |
+| [docs/NETCODE.md](docs/NETCODE.md) | How online co-op works now: protocol 3, packets, the sure and quick lanes, measurements, testing |
+| [docs/AUTHORITY.md](docs/AUTHORITY.md) | Which PC decides what, how duplicates are prevented, who may talk to the relay |
+| [docs/COOP_GUIDE.md](docs/COOP_GUIDE.md) | What syncs and how: enemy matching, tests and results |
 | [docs/RECON_NOTES.md](docs/RECON_NOTES.md) | Classes, functions and data tables found in the game |
 | [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md) | Local co-op: setup, player 2's controls, what the game hardwires to player 1 and how the mod bridges it |
 | [tools/localcoop/](tools/localcoop/) | Local co-op test tools: launcher, command runner, Lua probes for enemies and fight areas, soak |

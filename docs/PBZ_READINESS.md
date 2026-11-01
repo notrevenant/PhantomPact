@@ -1,7 +1,7 @@
 # Phantom Blade Zero: readiness guide
 
 Everything we know before launch, what we learned on Black Myth: Wukong, and exactly what to do on day one.
-Last updated 2026-10-19.
+Last updated 2026-10-19; section 6 on 2026-11-01.
 
 ## 1. What we know about the game
 
@@ -97,49 +97,34 @@ Watch for an error/exception widget after every step (list visible widgets with 
 | Flow | `Checkpoint`, `Save`, `Respawn`, `Sequence`, `Cinematic`, `Boss` |
 | Error UI | `Exception`, `Error` widgets |
 
-## 6. Online over Tailscale (built 2026-10-28)
+## 6. Online over Tailscale
 
-Tailscale first because we can test it ourselves; Steam networking comes later as a second transport.
+Built 2026-10-28, Tailscale first because we can test it ourselves; Steam came later as a second transport. How it
+works now is in [NETCODE.md](NETCODE.md), protocol 3 since 1.4.2. The relay is the one built into `main.dll`; the Python
+relay this section first described is out of the game.
 
 | Piece | What it does |
 |---|---|
-| `net/pbzcoop_net.py` | UDP relay, Python standard library only. `host` listens on UDP 47800, `client` connects to the host's Tailscale IP, `echo` fakes a friend from your own movement (solo test). Ping/timeout built in; writes `net_status.txt`. |
-| Mod `neton` / `netoff` / `netstatus` | Every 50 ms writes `<seq> <x> <y> <z> <yaw>` to `net_out.txt`, reads the friend's line from `net_in.txt`, shows them as a collision-free ghost pawn moved smoothly (~60 Hz). A puppet, not a local player, so no P2 controller. |
+| `native/`, shipped as `dlls\main.dll` | UDP relay inside the game. `Role = Host` listens on UDP 47800, `Role = Guest` connects to the host's Tailscale IP. Writes `net_status.txt` once a second. |
+| `autostart.lua` | Reads `PhantomPact.ini`, starts the relay through `net_start.txt`, and sends `neton` once the player is in the world. |
+| Mod `neton` / `netoff` / `netstatus` | Turn sync on or off, or print the link's state. The partner is a ghost: a puppet, not a local player, so no P2 controller. |
 | `tools/pbz-setup.ps1` | One-shot launch-day setup (game info, save backup, UE4SS, configs, mod). `-Disable` / `-Enable` toggles UE4SS. |
 
 **Machines:** this PC `yhsharaf` = `100.112.4.45`; second PC `desktop-gfqd042` = `100.92.213.68`.
 
-**Tested 2026-10-28:** host ↔ client over `127.0.0.1` and over the Tailscale IP on this PC (both sides received each
-other's state; ping ~0 ms after switching to `select`), and echo mode (state returned +300 cm). **Not yet tested:**
-two different PCs, and anything inside the game.
+**Main test method: two copies on this PC.** [tools/netlab/README.md](../tools/netlab/README.md) runs them from a
+separate install, `C:\PBZDev`. Why this method: one Steam account can't run PBZ on two PCs at once, so the second PC
+would need a second account that owns the game.
 
-**Two-PC relay test (no game needed):** copy `net\pbzcoop_net.py` to the other PC (needs Python 3), then:
-- This PC: `python -I net\pbzcoop_net.py host --dir C:\temp\pbznet`
-- Other PC: `python -I pbzcoop_net.py client --dir C:\temp\pbznet --peer 100.112.4.45`
-- Both print `connected=yes` with a ping. If the host never connects, Windows Firewall is blocking Python on the
-  host: allow it when Windows asks (private network).
-
-**Main test method: two copies on this PC (like Blood Pact's self-test).** `tools/pbz-selftest.ps1` starts copy 1
-(host, files in the mod folder) and copy 2 (client, files in `inst2\`), each with its own `PBZCOOP_INSTANCE`, plus a
-host and client relay over `127.0.0.1`. It backs up saves first; `-Stop` closes only what it started. The driver
-targets one copy with `Select-GameInstance -ProcessId <pid> -Instance <1|2>`. Dry run on a stand-in window passed
-(2026-10-28). Why this method: one Steam account can't run PBZ on two PCs at once, so the second PC would need a
-second account that owns the game.
-
-Unknowns to check at unlock (the script reports each):
-- **PBZ may refuse a second copy** (single-instance check, Steam or Denuvo). Then fall back to solo `echo`.
-- **The game may relaunch itself through Steam** when started directly, dropping `PBZCOOP_INSTANCE`. A
-  `steam_appid.txt` next to the exe usually stops that, but it's a change to the game folder, so ask first.
-- **Both copies share one save folder and one `UE4SS.log`.** Saves are backed up per run; log lines from copy 2
+What launch taught us about two copies:
+- **PBZ refuses a second copy** unless it's started with `-allowmultipleinstances`, the game's own switch.
+- **Both copies share one save folder and one `UE4SS.log`** when they run from the same install. Log lines from copy 2
   are tagged `[PBZCoop#2]`.
 
-**In-game, at unlock:** run `pbz-setup.ps1`, load into gameplay, then:
-1. Solo: `python -I net\pbzcoop_net.py echo --dir "<PBZ Win64>\ue4ss\Mods\PBZCoop"` and `Send-ModCommand neton`;
-   a ghost should follow you 3 m to the side. `netstatus` reports the distance.
-2. Two PCs: host + client relays (each pointing `--dir` at its own game's mod folder), `neton` on both.
-
-**Next layers after the ghost works:** swap the ghost for a proper character (animation from replicated speed/state),
-then attacks/hits (host decides damage), then enemy state (host-owned AI, client puppets).
+**Two PCs:** there's no game-free relay test between PCs now: the bots in `relay_cli` bind to loopback only. Run the game
+on both, set `PhantomPact.ini`, and read `net_status.txt` on each. It should show `connected=yes` with a ping. If the
+host never connects, Windows Firewall is blocking the game on the host: allow `PBZ.exe` when Windows asks (private
+network). Protocol 3 hasn't had this test yet.
 
 ## 7. Online later (stretch)
 

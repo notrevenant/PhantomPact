@@ -113,19 +113,19 @@ return function(api)
     end
 
     -- The mouse and keys, from Windows through main.dll: with the mouse let go of, the game itself sees no input.
-    -- Returns the cursor in panel units, then left button, Escape and F4 as booleans.
+    -- Returns the cursor in panel units, then left button, Escape, F4 and whether this game has the focus, as booleans.
     local function input()
         local f = io.open(api.modDir() .. "mouse.txt", "r")
         if not f then
             return nil
         end
-        local px, py, left, esc, f4 = f:read("n", "n", "n", "n", "n")
+        local px, py, left, esc, f4, focused = f:read("n", "n", "n", "n", "n", "n")
         f:close()
         if not f4 then
             return nil
         end
         return (px / origin.dpi - origin.x) / origin.scale, (py / origin.dpi - origin.y) / origin.scale,
-            left == 1, esc == 1, f4 == 1
+            left == 1, esc == 1, f4 == 1, focused == 1
     end
 
     local function inside(x, y, r, w, h)
@@ -437,6 +437,10 @@ return function(api)
         log(string.format("Panel %s: %d players, %s, p1 %s, p2 %s", panel.open and "open" or "closed", choice.players,
             choice.layout, tostring(choice.p1), tostring(choice.p2)))
     end
+
+    -- What the online panel (onlinepanel.lua) draws and reads with: the same units, widgets and input.
+    panel.kit = { W = W, H = H, origin = origin, parts = parts, part = part, place = place, hide = hide, dim = dim,
+        measure = measure, input = input, inside = inside, key = key, blockPlay = blockPlay, writeWant = writeWant }
 
     return panel
 end

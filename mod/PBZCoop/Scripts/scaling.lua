@@ -14,11 +14,14 @@ return function(api)
         posture = 1.3,      -- CoopEnemyPosture / 100
     }
 
+    local PASS_S = 1.0              -- a look over the enemies starts this often while the partner is here
+    local LOOKS_PER_TICK = 16       -- enemies looked at per tick, and at most one scaled: that takes about 25 calls through
+                                    -- UE4SS, and all those near a new player scaled in one frame was a 23 ms frame
+
     local scaled = {}               -- enemy address -> true once scaled
 
-    local function scaleAttr(actor, name, maxName, factor)
+    local function scaleAttr(set, name, maxName, factor)
         pcall(function()
-            local set = actor.AttributeSetBase
             local mx, cur = set[maxName], set[name]
             local share = (mx.CurrentValue > 0) and (cur.CurrentValue / mx.CurrentValue) or 1
             local newMax = mx.CurrentValue * factor
@@ -29,33 +32,46 @@ return function(api)
         end)
     end
 
-    -- Every second while the partner is here: scale enemies we haven't scaled yet.
-    local next = 0
+    -- While the partner is here: scale enemies we haven't scaled yet, a few looks a tick. The list is the one the net loop
+    -- keeps: the search for enemies is its job, once a second, and two in one frame was part of the worst case.
+    local next, todo, addrs, at, n = 0, {}, {}, 1, 0
     local function tick()
         if scaling.health == 1 and scaling.posture == 1 then
             return
         end
-        if os.clock() < next then
-            return
-        end
-        next = os.clock() + 1.0
-        -- "With you": synced and the partner's ghost is in this world (same map, alive).
-        if not (net.enabled and net.target and valid(net.ghost) and not net.ghostHidden) then
-            return
-        end
-        local n = 0
-        for _, e in ipairs(game.listEnemies()) do
-            local addr = e:GetAddress()
-            if not scaled[addr] and not game.isDead(e) then
-                scaled[addr] = true
-                scaleAttr(e, "Health", "Health_Max", scaling.health)
-                scaleAttr(e, "Shachi", "Shachi_Max", scaling.posture)
-                n = n + 1
+        if at > #todo then
+            if n > 0 then
+                log(string.format("Co-op difficulty: %d enem%s at %d%% health, %d%% posture.", n, n == 1 and "y" or "ies",
+                    math.floor(scaling.health * 100 + 0.5), math.floor(scaling.posture * 100 + 0.5)))
+                n = 0
             end
+            if os.clock() < next then
+                return
+            end
+            next = os.clock() + PASS_S
+            -- "With you": synced and the partner's ghost is in this world (same map, alive).
+            if not (net.enabled and net.target and valid(net.ghost) and not net.ghostHidden) then
+                return
+            end
+            todo, addrs = game.enemiesSoFar()
+            at = 1
         end
-        if n > 0 then
-            log(string.format("Co-op difficulty: %d enem%s at %d%% health, %d%% posture.", n, n == 1 and "y" or "ies",
-                math.floor(scaling.health * 100 + 0.5), math.floor(scaling.posture * 100 + 0.5)))
+        for _ = 1, LOOKS_PER_TICK do
+            local e, addr = todo[at], addrs[at]
+            if e == nil then
+                return
+            end
+            at = at + 1
+            if not scaled[addr] and valid(e) then
+                scaled[addr] = true       -- (or it's dead, and nothing brings it back as the same actor)
+                if not game.isDead(e) then
+                    local set = e.AttributeSetBase
+                    scaleAttr(set, "Health", "Health_Max", scaling.health)
+                    scaleAttr(set, "Shachi", "Shachi_Max", scaling.posture)
+                    n = n + 1
+                    return
+                end
+            end
         end
     end
     api.coop.extraTicks.scaling = tick

@@ -1,12 +1,12 @@
 # Nexus Mods page: Phantom Pact
 
-Sections as in the Nexus form; the same text is in dist\Nexus-upload\paste\ for pasting.
+Sections as in the Nexus form.
 
 ## Name and summary
 
 Phantom Pact - Online Co-op
 
-Online co-op for Phantom Blade Zero. Play with a friend online, each in your own game and save: see each other fight, take on shared enemies and bosses together, share loot and dust, and rest at bells together. 2 players, connected over Tailscale.
+Online co-op for Phantom Blade Zero. Play with a friend online, each in your own game and save: see each other fight, take on shared enemies and bosses together, share loot and dust, and rest at bells together. 2 players, connected over Tailscale or another virtual LAN.
 
 ## Description
 
@@ -15,15 +15,14 @@ Phantom Pact adds online co-op to Phantom Blade Zero. Two players each run their
 ## Installation instructions
 
 Install UE4SS for Phantom Blade Zero (see Requirements): put dwmapi.dll and the ue4ss folder in the game’s PBZ\platform\steam folder. To find it: Steam > right-click the game > Manage > Browse local files, then open platform\steam.
-Download the mod and extract the zip anywhere, for example your Desktop.
-Double-click “1 - Install Phantom Pact.bat”. It finds the game through Steam and installs the mod.
-Start the game and load your save. The UE4SS console shows “[PBZCoop] Loaded” once the mod is running.
-Host: double-click “2 - Host.bat”.
-Friend: double-click “3 - Join friend.bat” and type the host’s Tailscale IP (it starts with 100. and is shown in the host’s Tailscale app).
-Play together. To stop, both double-click “Stop co-op.bat”.
+Extract everything in the zip into the game’s PBZ folder and say yes to merging folders. The mod lands in platform\steam\ue4ss\Mods\PBZCoop.
+Open platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini in Notepad. Host: change Role = Guest to Role = Host. Friend: set HostAddress to the host’s Tailscale IP (it starts with 100. and is shown in the host’s Tailscale app).
+Start the game and load your saves, the host first. Co-op starts by itself once you’re in the world. The first time you host, Windows asks whether the game may use the network: click Allow.
+In testing: with OnlinePanel = On in the ini, F4 opens a panel that hosts, joins or leaves with no restart. Joining over Tailscale still needs HostAddress in the ini.
 
-Updating: extract the new version and run “1 - Install Phantom Pact.bat” again.
-To uninstall: delete the ue4ss\Mods\PBZCoop folder from the game folder.
+Updating: both players update. Extract the new version over the old one, then set Role and HostAddress again.
+Playing alone: set Role = Off.
+To uninstall: delete the platform\steam\ue4ss\Mods\PBZCoop folder.
 
 ## Main features
 
@@ -45,12 +44,13 @@ opens the panel for screen layout and pads. Details: docs/LOCAL_COOP.md on GitHu
 
 Phantom Blade Zero on Steam, for both players
 UE4SS for Phantom Blade Zero 1.0.1 by Vercadi (Nexus Mods), for both players
-Python 3 (python.org), with “Add python to PATH” ticked during install
-To connect: both use Tailscale (tailscale.com), signed in to the same network
-Both players use the same Phantom Pact version
+To connect: both use Tailscale (tailscale.com), signed in to the same network, or another virtual LAN
+Both players on the same Phantom Pact version: 1.4.1 or older can’t connect to 1.4.2
+No Python needed: the connection runs inside the game
 
 Early release, 2 players. The host leads into new areas and boss arenas. Cutscenes, dialogue and spending dust aren’t shared yet. Don’t press Ctrl+R (UE4SS hot reload) while playing together; restart the game instead.
-Please report bugs in the Bugs tab with your ue4ss\UE4SS.log and ue4ss\Mods\PBZCoop\net_status.txt.
+Can’t connect, or it feels laggy? The install guide in the zip has a Connection problems section.
+Please report bugs in the Bugs tab with your ue4ss\UE4SS.log, ue4ss\Mods\PBZCoop\net_status.txt and ue4ss\Mods\PBZCoop\relay_log.txt.
 
 ## Shout outs
 
