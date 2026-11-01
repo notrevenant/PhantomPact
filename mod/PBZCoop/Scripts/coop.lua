@@ -14,6 +14,7 @@
 --       B <boss>             the sender's game started a boss fight with this enemy
 --       R [bell|death]       the sender rested at a bell, or the host died and respawned: enemies respawn on both
 --                            PCs (a client's own death respawn isn't sent: only its world refreshes)
+--       Y <world>            host -> client: stands for the host's world as loaded: another one, and enemies respawn here
 --       C <amount>           the sender gained this much dust (currency): shared rewards
 --       I <pickup>           this pickup/chest was taken
 --       W <weapon> <0|1>     what the sender holds, and whether it's drawn (moves.lua)
@@ -136,6 +137,8 @@ return function(api)
 
     -- These are only worth showing now: a move two seconds late is worse than none, and must never hold up a death.
     local QUICK = { U = true, M = true, A = true, H = true }
+
+    local hostWorld = os.time()   -- host: stands for the world as loaded, new with each game or map load (see handlers.Y)
 
     local function sendEvent(kind, ...)
         if not net.enabled then
@@ -937,11 +940,11 @@ return function(api)
         net.announced = {}
         net.enemyNames = {}
         if isHost() then
+            sendEvent("Y", hostWorld)
             for name in pairs(net.deadSent) do
                 sendEvent("K", name)
             end
         else
-            -- A new host world: what died here is sent over again (syncEnemy), or it would stay alive there and unseen here.
             net.hostKilled = {}
             net.guestKillSent = {}
         end
@@ -1148,6 +1151,17 @@ return function(api)
         seen = {}
         if game.refreshEnemies then
             game.refreshEnemies()
+        end
+    end
+
+    -- The host's world is everyone's truth. Loaded anew (it restarted, or left to the title screen and came back) it has
+    -- everything alive again, so this world refreshes too, or what died here would stay alive there and unseen here.
+    handlers.Y = function(world)
+        local known = net.hostWorld
+        net.hostWorld = world
+        if known ~= nil and known ~= world then
+            log("The host loaded its world again.")
+            handlers.R("bell")
         end
     end
 
@@ -1463,7 +1477,7 @@ return function(api)
             return
         end
         if link == nil then
-            log("Online sync can't start: main.dll can't be reached (see the line above). Reinstall Phantom Pact and check your antivirus didn't remove it.")
+            log("Online sync can't start: main.dll can't be reached (see the line above). Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide.")
             return
         end
         net.role = role
@@ -1473,8 +1487,20 @@ return function(api)
         net.deadSent = {}
         slow.map = nil              -- a relay started since (the panel's Join) has yet to hear which map this is
         link.reset()
+        if role == "host" then
+            sendEvent("Y", hostWorld)
+        end
         log("Online sync on as " .. role .. ".")
     end
+
+    pcall(function()
+        RegisterLoadMapPreHook(function()
+            hostWorld = os.time()
+            if isHost() then
+                sendEvent("Y", hostWorld)
+            end
+        end)
+    end)
 
     local function stop()
         net.enabled = false

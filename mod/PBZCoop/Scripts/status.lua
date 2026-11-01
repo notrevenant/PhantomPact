@@ -119,7 +119,8 @@ return function(api)
         local waited = now - status.aloneSince
         if s.role == "client" and waited >= GUEST_ALONE_S then
             local steam = s.via == "steam"
-            notify("alone", (steam and "no friend hosting found. Your partner needs Role = Host and Connect = Steam, and the same "
+            notify("alone", (steam and "no friend hosting found. You must be Steam friends, and your partner needs Role = Host, "
+                .. "Connect = Steam and not to be Invisible in Steam (or put their SteamID64 in HostAddress), and the same "
                 or ("no answer from the host (" .. tostring(s.peer) .. "). Check HostAddress and Port, that they're "
                     .. "in the game on Role = Host, and the same ")) .. "Secret and Phantom Pact version on both PCs.")
         elseif s.role == "host" and waited >= HOST_ALONE_S and not status.hostTold then
@@ -143,6 +144,10 @@ return function(api)
             notify("relay", "co-op couldn't start: " .. s.error)
         end
         reportSilence(s)
+
+        if s.connected ~= "yes" and s.link_problem and s.link_problem ~= "-" and s.link_problem ~= last.link_problem then
+            notify("link", "Steam couldn't connect: " .. s.link_problem:gsub("_", " ") .. ". See Connection problems in the install guide.")
+        end
 
         if s.connected == "yes" and last.connected ~= "yes" then
             notify("conn", "partner connected" .. (net.rttMs and string.format(" (ping %d ms)", net.rttMs) or "")

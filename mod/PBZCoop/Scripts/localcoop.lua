@@ -381,6 +381,12 @@ return function(api)
                                 if not mesh:IsVisible() then
                                     mesh:SetVisibility(true, false)
                                 end
+                                -- Swords hit the mesh, and the far-away wave turns its collision off: enemies hit player
+                                -- 2, but its blade goes through them. Not on the dead: they fall as the game set them.
+                                if mesh:GetCollisionEnabled() == 0 and not game.isDead(owner) then
+                                    mesh:SetCollisionProfileName(FName("Profile_CharacterMesh"), true)
+                                    mesh:SetCollisionEnabled(3)
+                                end
                             end
                         end)
                     end
@@ -584,6 +590,31 @@ return function(api)
 
     -- The game's camera sits over the shoulder, with the Soul off to the left. With the screen split each Soul belongs
     -- in the middle of its own view: this shifts the camera back, on top of whatever camera mode is active.
+    -- A screen picks its button pictures from how the game thinks that player plays, and the game only hears player 1's
+    -- pad: player 2's screen stays on mouse and keyboard and its prompts show the wrong pictures. So it's told, and gets
+    -- the same pictures as player 1.
+    V.nextPictures = 0
+    local function padPictures()
+        if config.p2 == "kbm" or os.clock() < V.nextPictures then
+            return
+        end
+        V.nextPictures = os.clock() + 1.0
+        local s1, s2 = nil, nil
+        for _, s in ipairs(FindAllOf("CommonInputSubsystem") or {}) do
+            if s:GetOuter().ControllerId == 0 then s1 = s else s2 = s end
+        end
+        if not (valid(s1) and valid(s2)) then
+            return
+        end
+        if s2:GetCurrentInputType() ~= 1 then
+            s2:SetCurrentInputType(1)       -- ECommonInputType::Gamepad
+        end
+        local name = s1:GetCurrentGamepadName()
+        if s2:GetCurrentGamepadName():ToString() ~= name:ToString() then
+            s2:SetGamepadInputType(name)
+        end
+    end
+
     local function centreCamera(pawn)
         pcall(function() pawn.NBCamera:SetAdditiveSocketOffset({ X = 0, Y = -SHOULDER_CM, Z = 0 }, CENTRE_SPEED) end)
     end
@@ -886,6 +917,7 @@ return function(api)
         end
         centreCamera(p1)
         centreCamera(p2)
+        pcall(padPictures)
         -- The game's death flow sends "the player" to the bell, and that's player 1 whichever Soul died. So player 2 never
         -- really dies: health stops at DOWN_HP, and that counts as down until they're back beside player 1.
         if not waiting[2] then
@@ -1344,9 +1376,58 @@ return function(api)
         return true
     end
 
+    -- A bell clears player 0's control sets, and the game hands them back to whichever controller holds the resting Soul
+    -- by then: player 2's, once the bodies are back. Player 1 is left with none and can't move. So for a while after a
+    -- swap, player 1 gets what player 2 has.
+    local CONTROLS_WATCH_S, CONTROLS_EVERY_S = 10, 0.5
+    local controlsUntil, controlsAt = 0, 0
+
+    local function giveControlsBack()
+        local now = os.clock()
+        if now > controlsUntil or now < controlsAt then
+            return
+        end
+        controlsAt = now + CONTROLS_EVERY_S
+        local s1, s2 = inputSubsystemOf((getPlayer1())), inputSubsystemOf(state.p2Controller)
+        if not (s1 and s2) then
+            return
+        end
+        local given = 0
+        for _, c in ipairs(FindAllOf("InputMappingContext") or {}) do
+            local found = {}
+            if s2:HasMappingContext(c, found) and not s1:HasMappingContext(c, {}) then
+                s1:AddMappingContext(c, found.OutFoundPriority or 0, {})
+                given = given + 1
+            end
+        end
+        if given > 0 then
+            log(string.format("Player 1's controls put back (%d sets).", given))
+        end
+    end
+
+    -- The Soul that rested can't guard afterwards: seen after every bell, and gone once it's replaced, as a death does. A
+    -- new one takes its place on the spot. A rest heals anyway.
+    local RENEW_AFTER_S = 1.0
+
+    local function renewPlayer2()
+        local old = state.p2Pawn
+        local _, p1 = getPlayer1()
+        if swapped or inScene or p2DownSince or not (valid(old) and valid(p1)) then
+            return
+        end
+        local at, facing = old:K2_GetActorLocation(), old:K2_GetActorRotation()
+        leaveDomains(old)
+        respawn(p1)
+        if valid(state.p2Pawn) then
+            state.p2Pawn:K2_SetActorLocationAndRotation(at, facing, false, {}, true)
+            log("Player 2 is up from the bell.")
+        end
+    end
+
     local function unswapBodies()
         local pc1, pc2 = getPlayer1(), state.p2Controller
         local p1, p2 = state.swapBody1, state.swapBody2
+        local rested = swapIsBell
         swapped = false
         if not (valid(pc1) and valid(pc2) and valid(p1) and valid(p2)) then
             return
@@ -1360,12 +1441,22 @@ return function(api)
         pcall(function() pc1:ResetIgnoreInputFlags() end)
         pcall(function() pc2:ResetIgnoreInputFlags() end)
         viewOwnBodies(pc1, pc2, p1, p2)
+        controlsUntil, controlsAt = os.clock() + CONTROLS_WATCH_S, 0
         log("Player 2's turn is over: controls are back.")
+        if rested then
+            game.after(RENEW_AFTER_S, function()
+                local ok, err = pcall(renewPlayer2)
+                if not ok then
+                    log("Player 2's new Soul: " .. tostring(err))
+                end
+            end)
+        end
     end
 
     -- Called often: swaps back once player 2's body has finished (nothing interacting, no bell menu) or on a timeout.
     local function watchSwap()
         if not swapped then
+            pcall(giveControlsBack)
             return
         end
         local body = state.swapBody2
@@ -1481,6 +1572,8 @@ return function(api)
         end
         return (dx * f.X + dy * f.Y) / len >= (minDot or 0.7)
     end
+    V.TALK_CM = 400
+
     local function findTarget(pawn, want)
         local bp = backpackOf(pawn)
         if want ~= "climb" and bp and bp.bShowPickItemWidget then
@@ -1557,6 +1650,18 @@ return function(api)
         end
         if best then
             return "switch", best, bp
+        end
+        -- A person close by. The game only offers one to player 2 now and then, and not at all with player 1 far away, so
+        -- its offer isn't waited for: a talk starts from anywhere (see kind "talk").
+        local person, personD = nil, V.TALK_CM
+        for _, n in ipairs(FindAllOf("BP_NPC_Narrative_C") or {}) do
+            local okL, loc = pcall(function() return n:K2_GetActorLocation() end)
+            if okL and loc.X and distance(at, loc) < personD then
+                person, personD = n, distance(at, loc)
+            end
+        end
+        if person then
+            return "talk", person, bp
         end
         for _, p in ipairs(FindAllOf("PBZPickupActor") or {}) do
             local okL, loc = pcall(function() return p:K2_GetActorLocation() end)
@@ -1644,6 +1749,20 @@ return function(api)
                     end
                 end)
             end)
+            return
+        end
+        if kind == "talk" then
+            -- Player 1's own component starts a talk, as its button does. The dialogue fills both screens anyway, and given to
+            -- player 2's component it never opens, with the controllers swapped or not.
+            local _, p1 = getPlayer1()
+            local ic1 = valid(p1) and componentOf(p1, "PBZInteractComponent") or nil
+            if ic1 then
+                local ok, err = pcall(function()
+                    ic1:SetCurrentInteractActor(target)
+                    ic1:DoInteract(target)
+                end)
+                log("Player 2 talks to " .. target:GetClass():GetFName():ToString() .. (ok and "." or (": " .. tostring(err))))
+            end
             return
         end
         if kind == "switch" then

@@ -26,6 +26,7 @@ constexpr int CONFIG_RELAY_PENALTY = 106;      // P2P_Transport_SDR_Penalty: add
 constexpr int ICE_STEAM_DECIDES = -1;          // k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_*
 constexpr int ICE_PRIVATE = 2, ICE_PUBLIC = 4;
 constexpr int STATE_CONNECTING = 1, STATE_FINDING_ROUTE = 2, STATE_CONNECTED = 3;   // ESteamNetworkingConnectionState
+constexpr int RESULT_OK = 1;                   // k_EResultOK
 constexpr int INFO_FLAG_RELAYED = 16;          // k_nSteamNetworkConnectionInfoFlags_Relayed
 constexpr int SEND_RATE = 4 * 1024 * 1024;     // bytes a second, see tune
 constexpr int RELAY_PENALTY_MS = 20;
@@ -254,12 +255,15 @@ public:
                 const double now = relay::monotonic();
                 if (now - queued_at < CONNECTING_SEND_GAP) return;
                 queued_at = now;
+            } else if (state != STATE_CONNECTED) {
+                note_end(id);
             }
         }
         // The restart flag: a session that broke (a stall of 10 s, the partner's game restarting) just starts again, which
         // only unreliable traffic can afford. A full send buffer drops the message, like a full socket.
-        send_(msgs_, &id, data.data(), static_cast<uint32_t>(data.size()), SEND_NO_NAGLE | SEND_AUTO_RESTART_BROKEN_SESSION,
-              CHANNEL);
+        const int result = send_(msgs_, &id, data.data(), static_cast<uint32_t>(data.size()),
+                                 SEND_NO_NAGLE | SEND_AUTO_RESTART_BROKEN_SESSION, CHANNEL);
+        if (result != RESULT_OK) refused++;
     }
 
     std::vector<std::pair<relay::Addr, std::string>> receive() override {
@@ -317,6 +321,8 @@ public:
         return playing_;
     }
 
+    std::string problem() override { return problem_; }
+
     std::string describe(const relay::Addr& a) override {
         std::string name = name_of(a.steam);
         return name.empty() ? std::to_string(a.steam) : name;
@@ -333,6 +339,17 @@ private:
         id.size = 8;
         id.steam_id = steam_id;
         return id;
+    }
+
+    // Why the last session ended, in Steam's words: nothing else tells why two PCs never connect.
+    void note_end(const Identity& id) {
+        SessionInfo info{};
+        session_info_(msgs_, &id, &info, nullptr);
+        if (info.end_reason == 0) return;
+        info.end_debug[sizeof info.end_debug - 1] = 0;
+        problem_ = std::to_string(info.end_reason) + "_" + info.end_debug;
+        for (char& c : problem_)
+            if (static_cast<unsigned char>(c) <= ' ' || static_cast<unsigned char>(c) >= 127) c = '_';
     }
 
     std::string name_of(uint64_t id) {
@@ -383,6 +400,7 @@ private:
     void (*release_)(Message*) = nullptr;
     int (*session_info_)(void*, const Identity*, SessionInfo*, SessionStatus*) = nullptr;
     bool (*close_)(void*, const Identity*) = nullptr;
+    std::string problem_;
     std::string wanted_;
     std::vector<relay::Addr> playing_;
     std::map<uint64_t, double> sessions_;    // everyone this run talked to, and the last send while their session wasn't up

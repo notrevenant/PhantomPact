@@ -58,6 +58,12 @@ return function(api)
                 tip("cine", "your partner is watching a cutscene.")
             end
         end
+        -- Another map: the ghost hides, so this says why. (Two saves can be far apart in the story.)
+        local otherMap = t.Map ~= nil and net.localMap ~= nil and t.Map ~= net.localMap
+        if otherMap and not partner.otherMap then
+            tip("map", "your partner is on another map. You'll see each other once you're both on the same one.")
+        end
+        partner.otherMap = otherMap
         -- Far apart in the same area: one tip each time you drift apart.
         local l = net.localLoc
         if l and t.Map ~= nil and t.Map == net.localMap then

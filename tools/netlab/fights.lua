@@ -112,6 +112,71 @@ function FIGHT.swing()
     return "swing " .. tostring(asc:TryActivateAbilityByClass(c, true))
 end
 
+-- The abilities player 1 owns whose class name matches, to find what a key really does.
+function FIGHT.abilities(pattern)
+    local asc = StaticFindObject("/Script/GameplayAbilities.Default__AbilitySystemBlueprintLibrary"):GetAbilitySystemComponent(pawn())
+    local out = {}
+    asc.ActivatableAbilities.Items:ForEach(function(_, x)
+        pcall(function()
+            local ab = x:get().Ability
+            if valid(ab) then
+                local n = ab:GetClass():GetFName():ToString()
+                if not pattern or n:match(pattern) then out[#out + 1] = n end
+            end
+        end)
+    end)
+    table.sort(out)
+    return table.concat(out, " ")
+end
+
+-- One of player 1's abilities by class name, the way its key would start it.
+function FIGHT.use(name)
+    local asc = StaticFindObject("/Script/GameplayAbilities.Default__AbilitySystemBlueprintLibrary"):GetAbilitySystemComponent(pawn())
+    local c
+    asc.ActivatableAbilities.Items:ForEach(function(_, x)
+        pcall(function()
+            local ab = x:get().Ability
+            if c == nil and valid(ab) and ab:GetClass():GetFName():ToString() == name then c = ab:GetClass() end
+        end)
+    end)
+    if not valid(c) then return "no " .. name end
+    return tostring(asc:TryActivateAbilityByClass(c, true))
+end
+
+-- Logs each change to player 1's health and posture for this long, starting an ability every so many seconds if given
+-- (a guard kept up, or tapped). The loop can't be ended from here, so it just goes quiet.
+function FIGHT.hits(seconds, ability, every)
+    local p, t0, nextUse = pawn(), os.clock(), 0
+    local hp, posture = game.getHealth(p), game.getPosture(p)
+    local tally = { hits = 0, lost = 0, posture = 0, used = 0 }
+    FIGHT.tally = tally
+    FIGHT.hitsId = (FIGHT.hitsId or 0) + 1
+    local id = FIGHT.hitsId
+    LoopInGameThreadWithDelay(50, function()
+        if id ~= FIGHT.hitsId then return false end
+        local t = os.clock() - t0
+        if t > seconds then
+            FIGHT.hitsId = FIGHT.hitsId + 1
+            log(string.format("HITS over: %d changes, health -%.0f, posture -%.0f, %s used %d times", tally.hits, tally.lost,
+                tally.posture, tostring(ability), tally.used))
+            return false
+        end
+        if ability and t >= nextUse then
+            nextUse = t + (every or 0.4)
+            if FIGHT.use(ability) == "true" then tally.used = tally.used + 1 end
+        end
+        local h, s = game.getHealth(p), game.getPosture(p)
+        if h and hp and (math.abs(h - hp) > 0.5 or (s and posture and math.abs(s - posture) > 0.5)) then
+            tally.hits = tally.hits + 1
+            tally.lost = tally.lost + math.max(0, hp - h)
+            tally.posture = tally.posture + math.max(0, (posture or 0) - (s or 0))
+            log(string.format("HITS %.2f health %.0f -> %.0f posture %.0f -> %.0f", t, hp, h, posture or -1, s or -1))
+        end
+        hp, posture = h or hp, s or posture
+        return false
+    end)
+end
+
 -- Faces player 1 at an actor from this far away. A stale actor reads as the world origin: player 1 stays put then.
 function FIGHT.beside(e, cm)
     local p = pawn()

@@ -11,6 +11,8 @@ Not posted. For the user to edit and post, on GitHub and Nexus.
 - Your partner's position updates up to 60 times a second, up from 10, and stays within about 35 cm of where they
   really are, even on a bad connection (100 ms ping, 2% loss)
 - A kill shows on the other PC about 20 ms after it happens, plus your ping
+- If the host restarts, or goes to the title screen and back, enemies respawn for both players, as at a bell, so nobody
+  fights enemies the other can't see
 - Steam can now connect directly, for less delay: set `SteamDirect = On` on both PCs. Your partner can then see your IP
   address, so it's off by default
 - The game now says what's wrong when you can't connect, `net_status.txt` shows ping, jitter and packet loss, and

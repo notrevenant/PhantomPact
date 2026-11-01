@@ -27,7 +27,7 @@ return function(api)
     local RESTART_S = 0.05        -- the same montage at an earlier position = played again
     local PASSIVE = { "Passive", "Locomotion", "SpaceState", "Stance", "Utilities" }
 
-    local puppets = { attacks = 0, played = 0, failed = 0 }
+    local puppets = { attacks = 0, played = 0, failed = 0, noCopy = 0 }
     local byAddr = {}             -- guest: actor address -> { actor, name, target, busyUntil }
     local hostSeen = {}           -- host: enemy name -> { addr, pos } of the montage last sent
     local hostAnim = {}           -- host: actor address -> its AnimInstance
@@ -121,6 +121,7 @@ return function(api)
         local actor = coop.enemyActor(name)
         local p = valid(actor) and byAddr[actor:GetAddress()]
         if not p or game.isDead(actor) then
+            puppets.noCopy = puppets.noCopy + 1
             return
         end
         local target = p.target
@@ -202,8 +203,8 @@ return function(api)
         for _ in pairs(byAddr) do
             n = n + 1
         end
-        log(string.format("Puppets: %d following the host, attacks sent %d, played %d, failed %d",
-            n, puppets.attacks, puppets.played, puppets.failed))
+        log(string.format("Puppets: %d following the host, attacks sent %d, played %d, failed %d, no copy here %d",
+            n, puppets.attacks, puppets.played, puppets.failed, puppets.noCopy))
     end
 
     return puppets

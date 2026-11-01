@@ -38,7 +38,7 @@ UE4SS 控制台会显示 `Phantom Pact Host: co-op on`(或 Guest),连接成功�
 
 ## 其他连接方式
 
-- **Steam:** 双方都设置 `Connect = Steam`,客人会加入正在做房主的 Steam 好友,不需要虚拟局域网。双方必须是 Steam 好友。客人的 `HostAddress` 留空或填房主的 Steam 名称;填 IP 地址会被忽略。`SteamDirect = Off`(默认)交给 Steam 自己的设置,通常走 Valve 的中继:IP 不会暴露,但延迟更高。`On` 会尝试直连,这是最快的方式,但搭档的电脑可以看到你的 IP 地址。直连需要双方都设为 `On`。
+- **Steam:** 双方都设置 `Connect = Steam`,客人会加入正在做房主的 Steam 好友,不需要虚拟局域网。双方必须是 Steam 好友,房主必须显示为在游戏中,不能隐身。客人的 `HostAddress` 留空或填房主的 Steam 名称;房主隐身时填其 SteamID64(17 位数字);填 IP 地址会被忽略。`SteamDirect = Off`(默认)交给 Steam 自己的设置,通常走 Valve 的中继:IP 不会暴露,但延迟更高。`On` 会尝试直连,这是最快的方式,但搭档的电脑可以看到你的 IP 地址。直连需要双方都设为 `On`。
 - **Secret(可选):** 在两台电脑的 `Secret =` 里填相同的密码,每个数据包都会被签名,网络上的其他人无法加入。使用 `AllowAnyAddress = On` 时建议设置。
 
 ## 屏幕显示
@@ -91,6 +91,7 @@ PvP 暂不支持处决(架势被破只会硬直)。
 | `route` | 仅 Steam:`direct`(直连)或 `relay`(经 Valve 服务器中继)。通过 IP 连接时为 `-`,见下文“直连还是中继” |
 | `rtt_ms` | 延迟(ping,一来一回,毫秒)。持续高于 250 时游戏会提示 |
 | `route_ping_ms` | 仅 Steam:Steam 自己测得的这条线路的延迟 |
+| `link_problem` | 仅 Steam:上一次连接结束时 Steam 给出的原因(编号和原文),没有时为 `-` |
 | `jitter_ms` | 抖动:数据包比近期最快的一次晚到多少毫秒。延迟低而抖动高,通常是 Wi-Fi 造成的 |
 | `delay_ms` | 为了让搭档动作平滑,画面上的搭档比实际晚多少毫秒。随抖动变化,最多约 220 |
 | `loss_pct` | 最近一秒的丢包率(百分比) |

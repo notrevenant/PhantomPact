@@ -335,11 +335,13 @@ public:
         int ping_ms = -1;          // the link's own measure of the round trip, if it has one
     };
     virtual Route route(const Addr&) { return {}; }
+    virtual std::string problem() { return ""; }           // the link's own words for its last failure, as one word
     virtual std::string describe(const Addr& a) = 0;
     virtual std::string describe_self() = 0;
     virtual const char* via() = 0;
     std::optional<Addr> peer;     // known up front (UDP guest, Steam guest given an id)
     long long filtered = 0;
+    long long refused = 0;        // sends the link turned down
 };
 
 class UdpLink : public Link {
@@ -912,6 +914,7 @@ public:
         std::snprintf(quality, sizeof quality, " jitter_ms=%.1f delay_ms=%.1f loss_pct=%.1f resent=%lld pending=%zu", jitter,
                       delay, loss, sure_out_.resent, sure_out_.pending());
         const Link::Route route = peer_ ? link_->route(*peer_) : Link::Route{};
+        const std::string problem = link_->problem();
         // time= (wall clock) lets the mod tell a running relay from a stale status file before starting another.
         return "role=" + role_ + " via=" + link_->via() + " connected=" + (connected ? "yes" : "no") + " peer=" + peer +
                " rtt_ms=" + rtt + " route=" + route.kind +
@@ -923,6 +926,7 @@ public:
                " partner_map=" + (partner_map_.empty() ? "-" : partner_map_) +
                " mismatch=" + (mismatch.empty() ? "-" : mismatch) + " events_acked=" + std::to_string(sure_out_.acked) +
                " events_in=" + std::to_string(sure_in_.count) + quality +
+               " link_problem=" + (problem.empty() ? "-" : problem) + " refused=" + std::to_string(link_->refused) +
                " time=" + std::to_string(static_cast<long long>(std::time(nullptr)));
     }
 

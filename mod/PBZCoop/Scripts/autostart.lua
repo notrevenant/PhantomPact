@@ -87,6 +87,13 @@ return function(api)
         api.localcoop.start(tonumber(settings.joysticks) or 2)
         return
     end
+    -- What stops co-op from starting. The player reads it in the game, once in the world: a log line is easy to miss.
+    local setupTip = nil
+    local function setupProblem(text)
+        log(text)
+        setupTip = text
+    end
+
     -- What the ini says about reaching the partner in this role, or nil and what's wrong.
     local function connection(s, wanted)
         local c = { role = wanted, modRole = ({ host = "host", guest = "client" })[wanted] }
@@ -121,7 +128,7 @@ return function(api)
     -- settings both players should share from the ini itself.
     local function startRelay(c, s)
         if not api.link then
-            log("Couldn't start the relay: dlls\\main.dll isn't running (reinstall Phantom Pact and check your antivirus didn't remove it).")
+            setupProblem("Couldn't start the relay: dlls\\main.dll can't be reached. Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide.")
             return false
         end
         local lines = { "role=" .. c.modRole, "port=" .. c.port, "transport=" .. (c.steam and "steam" or "udp"),
@@ -133,7 +140,7 @@ return function(api)
         writeText(path .. ".tmp", table.concat(lines, "\n") .. "\n")
         os.remove(path)
         if not os.rename(path .. ".tmp", path) then
-            log("Couldn't start the relay: net_start.txt can't be written in " .. modDir())
+            setupProblem("Couldn't start the relay: net_start.txt can't be written in " .. modDir())
             return false
         end
         local joining = c.modRole ~= "client" and ""
@@ -156,6 +163,15 @@ return function(api)
 
     -- Sync on once the relay has answered and the player is in the world.
     LoopInGameThreadWithDelay(500, function()
+        if setupTip then
+            pcall(function()
+                local _, pawn = getPlayer1()
+                if valid(pawn) then
+                    api.status.notify("setup", setupTip)
+                    setupTip = nil
+                end
+            end)
+        end
         if not current or current.on then
             return false    -- (returning true doesn't end this kind of loop in this UE4SS)
         end
@@ -220,7 +236,11 @@ return function(api)
 
     local c, why = connection(settings, role)
     if not c then
-        log(why)
+        if role == "host" or role == "guest" then
+            setupProblem(why)
+        else
+            log(why)
+        end
         return
     end
     c.settings = settings

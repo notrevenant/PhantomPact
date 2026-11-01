@@ -36,6 +36,9 @@ window, so nothing takes the focus.
 | `weird1.ps1` | Bell rest, sync off and on |
 | `fights.ps1 [-From n] [-To n]` | (Skip step 2: it teleports the guest to the world origin.) Boss fights, kills, a death and a revive, with `x.ps1` for single steps and `fights.lua` (`FIGHT.*`) |
 | `online-panel.ps1` | The F4 online panel: Host, Join, Leave, a refused Host, swapped roles, with PASS or FAIL per check |
+| `rejoin.ps1` | The host quits hard and comes back while the guest plays on |
+| `twosaves.ps1 [-Save <file>]` | The guest starts from an older save, as a second account would. The save is put back after |
+| `steam-start.ps1` | `Connect = Steam` on two copies: proves the link starts in the game. One account can't reach itself |
 
 `dev-start.ps1 -Role Host` restarts nothing: stop your old copies first. Only ever stop a process whose path is under
 `C:\PBZDev`.

@@ -24,6 +24,7 @@ Host = the player whose world is shared (Role = Host). Client = the guest.
 | Boss phases | **Host** (through health) | both run the boss's own phase logic | host health in enemy lines | phases follow health; a heal on the host reaches the client after 1 s instead of being ignored |
 | Bell rest (enemies respawn) | **whoever rests** | both | `R bell` | the receiver's refresh is flagged as mirrored, so it isn't sent back |
 | Death respawn | **the one who died** | own PC (the game refreshes your world) | host: `R death`; client: nothing | a client's death leaves the host's world (and fight) alone; the client re-kills what the host killed |
+| Host loads its world again (restart, or title screen and back) | **Host** | both | `Y <world>` | a new world has everything alive again, so the client's refreshes too, as at a bell; a Leave and Host in the panel keeps the same world |
 | Pickups | **whoever picks it up** | own PC | sure lane: `I <pickup> <item>` | the other side removes its copy and gets the item; if both grabbed it in the same moment, nobody gets a second one |
 | Dust (currency) | **whoever earns it** | own PC | sure lane: `C <amount>` | amounts the mod added for the other player are excluded from what it sends back |
 | Kill loot | **Host** rolls it | host | dust via `C`; the client's items via `I loot:<enemy>` | the host's own kills roll natively; a client's killing blow (the host's `Kill()` skips the roll) is rolled by the host once, with the game's own table and the enemy's level. A boss's items go to both players, whoever kills it |
@@ -144,10 +145,14 @@ Raised by appdoze (issue #1 / PR #2) and reworked from their code:
   most. A first join mid-session plays what the host sent before it joined, once: deaths (`K`), rests, shared items and
   dust. That's the same "shared rewards" rule, applied late, not a duplicate. A rejoin gets only what it hadn't
   acknowledged. Either way the partner's new session restarts both lanes and reaches the mod as `S`: the host names
-  its enemies again (`N`) and resends `K` for every enemy it has killed since the last rest.
+  its enemies again (`N`) and resends `K` for every enemy it has killed since the last rest. A host that loaded its
+  world again says so with `Y`, and the client's enemies respawn: what the client saw die is alive on the host again.
 
 ## Known limits
 
+- Some enemies come back with a map load but not at a bell. If the host loads its world again after the two killed one,
+  it's alive for the host and missing for the guest until the guest loads the map too: the host fights it alone. Seen
+  with two fire fighters in Xigu, of 13 enemies around.
 - If both players swing at the same enemy within the same 1.5 s in PvP, the ghost's replay can't be told from your
   own hit, so that drop is reported. It's harmless outside PvP, where the ghost does no damage.
 - Enemies the host hasn't loaded run their own AI on the guest's PC until the host lists them. A listed copy follows

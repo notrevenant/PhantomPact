@@ -57,7 +57,8 @@ instead.
   address from that app in `HostAddress` (leave `Connect = Tailscale`: it just means "connect by IP"). If the app
   hands out unusual addresses (UU, ZeroTier), the host also sets `AllowAnyAddress = On`.
 - **Steam:** both set `Connect = Steam`; the guest joins a Steam friend who's hosting. No Tailscale needed. You must be
-  Steam friends. The guest leaves `HostAddress` empty or puts the host's Steam name; an IP address there is ignored.
+  Steam friends, and the host must show as in the game, so not Invisible. The guest leaves `HostAddress` empty or puts the
+  host's Steam name, or their SteamID64 (17 digits) if they're Invisible; an IP address there is ignored.
   `SteamDirect = Off` (the default) leaves it to Steam's own setting, which normally means Valve's relays: your IP stays
   hidden, with more delay. `On` tries for a direct connection, the quickest, and your partner's PC can then see your IP
   address. A direct connection needs `On` on both PCs.
@@ -132,6 +133,7 @@ and open it again to see new numbers. The parts that help:
 | `route` | Steam only: `direct`, or `relay` through Valve's servers. `-` over IP: see Direct or relayed below |
 | `rtt_ms` | Ping, there and back, in ms. The game warns you if it stays above 250 |
 | `route_ping_ms` | Steam only: Steam's own ping for that route |
+| `link_problem` | Steam only: Steam's reason the last try ended, its number and its words, `-` if none |
 | `jitter_ms` | How late packets arrive compared with the fastest lately, in ms. High jitter with a low ping usually means Wi-Fi |
 | `delay_ms` | How far in the past your partner is shown so they move smoothly, in ms. It follows jitter, up to about 220 |
 | `loss_pct` | Packets lost in the last second, in percent |
