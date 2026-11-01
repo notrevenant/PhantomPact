@@ -10,8 +10,7 @@
 param([int]$Minutes = 5, [string]$Via = '--delay 75 --jitter 15 --loss 5')
 . (Join-Path $PSScriptRoot '..\dev.ps1')
 $lab = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path -replace '\\', '/'
-$cli = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..
-ativeuildelay_cli.exe')).Path
+$cli = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\native\build\relay_cli.exe')).Path
 $ue = 'C:\PBZDev\platform\steam\ue4ss'
 $began = Get-Date
 "mod hash " + (Install-DevMod)

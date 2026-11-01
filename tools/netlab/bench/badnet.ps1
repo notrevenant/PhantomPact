@@ -5,8 +5,7 @@ $c = Get-Content "$PSScriptRoot\dev-guest.json" -Raw | ConvertFrom-Json
 $h.Dir = 'C:\PBZDev\platform\steam\ue4ss\Mods\PBZCoop'
 $c.Dir = 'C:\PBZDev\platform\steam\ue4ss\Mods\PBZCoop\inst2'
 $lab = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path -replace '\\', '/'
-$cli = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..
-ativeuildelay_cli.exe')).Path
+$cli = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\native\build\relay_cli.exe')).Path
 $work = (Join-Path $env:TEMP 'pp-netlab') -replace '\\', '/'
 # Start the bad link, then the guest again through it: its relay's port is read at start.
 $t = Get-Date
