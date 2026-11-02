@@ -67,7 +67,7 @@ return function(api)
                 end
             end
             tip:SetVisibility(3)                    -- HitTestInvisible: seen, never clicked
-            tip:SetText(FText("Phantom Pact: " .. text))
+            tip:SetText(FText("Phantom Pact: " .. api.lang.say(text)))
             pcall(function() tip:PlayAnimation(tip.FadeIn, 0, 1, 0, 1, false) end)
             local shown = tip
             if game.after then

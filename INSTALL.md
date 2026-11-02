@@ -1,4 +1,4 @@
-# Phantom Pact 1.4.2: online co-op for Phantom Blade Zero
+# Phantom Pact 1.5.0: online co-op for Phantom Blade Zero
 
 Play the campaign with a friend: you see each other as a second Soul, fight the same enemies and bosses, and
 share loot, dust and bell rests. The host's world decides enemies, bosses and deaths; the guest's world follows.
@@ -9,8 +9,8 @@ Fan-made, unofficial. Each player needs their own copy of the game on Steam. No 
 https://github.com/yhsharaf/PhantomPact/issues. [What to send](#what-to-send-in-a-bug-report) is at the end of this
 guide.
 
-**Two players on one PC?** Set `Role = Local` instead of Host or Guest, plug in two pads, and read
-`docs/LOCAL_COOP.md` (in the GitHub repository) for player 2's controls. It is in testing.
+**Two players on one PC?** It's in this same download: set `Role = Local` in `PhantomPact.ini`, plug in two pads, and
+read `Phantom Pact - LOCAL CO-OP.md`, next to this guide, for player 2's controls. It is in testing.
 
 ## What you need (both players)
 
@@ -21,7 +21,7 @@ guide.
 You don't need Python: the connection runs inside the game (`PBZCoop\dlls\main.dll`). Its source is in the GitHub
 repository (`native/`).
 
-**Both players must use the same version.** 1.4.2 has a new connection, and 1.4.1 or older can't connect to it.
+**Both players must use the same version.** 1.5.0 has a new connection, and 1.4.1 or older can't connect to it.
 
 ## Install (both players)
 
@@ -39,11 +39,22 @@ repository (`native/`).
 The UE4SS console shows `Phantom Pact Host: co-op on` (or Guest), and
 `ue4ss\Mods\PBZCoop\net_status.txt` shows `connected=yes` once you're linked.
 
-**Or try the online panel (in testing):** set `OnlinePanel = On` in `PhantomPact.ini`. In the game, F4 then opens a panel
-where you pick Tailscale or Steam, then Host, Join or Leave, with no restart. It shows whether you're connected and your
-ping, and it saves your choice in `PhantomPact.ini` (Leave saves `Role = Off`). Joining over Tailscale still needs the
-host's address in `HostAddress`; you can add it while the game runs. With `Role = Local`, F4 is the local co-op panel
-instead.
+**Easiest: the panel.** In the game, press **F5** to open the online panel, with no text file and no restart. Pick
+Steam (nothing to set up: it finds your friend who's hosting), Tailscale, or Other Network, then press Host or Guest.
+For Tailscale and other networks, copy the host's address and press Paste. Tailscale also covers Hamachi, Radmin and
+a home network; Other Network is for ZeroTier and UU Accelerator. If you want a password, copy it and press Paste
+password on both PCs before you connect. English and 中文 at the top of the panel switch the language of the panel
+and the co-op messages. Your choices are kept for the next start.
+
+**MORE** opens the settings: TP > PARTNER, PvP, the partner compass, your partner on the map and Steam Direct, each ON
+or OFF. Revive is coming soon. Enemy difficulty is the game's own setting. With a partner, enemies always get extra health and
+posture on top of it.
+
+**Going to your partner.** Joining takes you to the host once, even on another map, so a friend with a new save can
+join a host further into the story. Your save stays where you land, so your own story can get ahead of where you were.
+After that, **F3** takes you to your partner if you turn TP > PARTNER on under MORE. It's off by default, because it's a
+lot of power to have on one key. Neither works during a boss fight, a cutscene, a duel or a menu, or while you or your
+partner are down.
 
 - **Updating:** both players update. Extract the new version over the old one, then set `Role` / `HostAddress` again.
   What an older version left in the `PBZCoop` folder (the `relay` folder, and `net_in.txt`, `net_out.txt` and the
@@ -62,8 +73,8 @@ instead.
   `SteamDirect = Off` (the default) leaves it to Steam's own setting, which normally means Valve's relays: your IP stays
   hidden, with more delay. `On` tries for a direct connection, the quickest, and your partner's PC can then see your IP
   address. A direct connection needs `On` on both PCs.
-- **Secret (optional):** the same password in `Secret =` on both PCs signs every packet, so nobody else on the
-  network can join. Recommended with `AllowAnyAddress = On`.
+- **Secret (optional):** the same password in `Secret =` on both PCs, or Paste password in the panel, signs every
+  packet, so nobody else on the network can join. Recommended with `AllowAnyAddress = On`.
 
 ## On screen
 
@@ -104,7 +115,12 @@ Not in PvP yet: executions (posture break only staggers).
 - Boss fights: when one of you starts a boss, the other is brought into the arena. Stay close when you're about to start
   one: far from the host, enemies that aren't loaded on the host's PC fight on their own on the guest's.
 - If your partner disappears, they are down, in a cutscene, on another map or disconnected; they come back.
-- If the guest dies during a boss fight, the host's fight goes on; the host's win counts for both.
+- With both of you in a fight, an enemy stays on one of you for about 15 seconds, then turns on the other if they've been
+  hitting it.
+- If one of you dies during a boss fight, they watch the other until it's over, and respawn when the boss dies or the
+  other dies too.
+- If you join while the host is in a boss fight, you watch it, and go to them when it's over. From another map you only
+  get a message, and go across at the end.
 - Not shared yet: cutscenes, dialogue, spending dust, quests and story progress.
 - Never press Ctrl+R (UE4SS hot reload) while playing together: it can crash the game. Restart the game instead.
 

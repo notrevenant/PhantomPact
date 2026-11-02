@@ -100,7 +100,7 @@ Watch for an error/exception widget after every step (list visible widgets with 
 ## 6. Online over Tailscale
 
 Built 2026-10-28, Tailscale first because we can test it ourselves; Steam came later as a second transport. How it
-works now is in [NETCODE.md](NETCODE.md), protocol 3 since 1.4.2. The relay is the one built into `main.dll`; the Python
+works now is in [NETCODE.md](NETCODE.md), protocol 3 since 1.5.0. The relay is the one built into `main.dll`; the Python
 relay this section first described is out of the game.
 
 | Piece | What it does |

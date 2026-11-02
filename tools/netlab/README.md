@@ -43,6 +43,26 @@ window, so nothing takes the focus.
 `dev-start.ps1 -Role Host` restarts nothing: stop your old copies first. Only ever stop a process whose path is under
 `C:\PBZDev`.
 
+### The whole story
+
+The retail build keeps its QA commands: construct `PBZCheatManager` on the player controller (`STORY.gm()`), then
+`GM_MoveTo`, `GM_Input attack|heavy|deflect|dodge|stance|switch|interact`, `GM_State preset immortal on`, `GM_SaveGame`,
+`GM_LoadGame`. `story.lua` reads the game's chapters, maps, bells and its own story-jump table (`STORY.apply(from, to)`,
+659 rows in story order) and travels by bell (`STORY.go`). `walker.lua` and `walker2.lua` play the quests: markers,
+dialogues, cutscenes. They can't solve obstacles alone; never force a step with `SucceedBranch`, it breaks the quest chain.
+
+| Script | What it does |
+|---|---|
+| `tour.ps1` | Every region in order: story events, travel by bell, a fight at each stop |
+| `survey.ps1` | Flies the guest over each level and writes down enemies, spawners and fog gates |
+| `spot.ps1 [-Start n]` | A real fight, both ways, at each spot chosen from the survey to meet every enemy class |
+| `walk.ps1` | The story walker on both copies |
+| `boss.ps1 -Row n -Bell x`, `bossrun.ps1` | One story boss from a rewind, or all of them |
+| `roles.ps1` | Puts host and guest back through the online panel's commands |
+
+With the host running as a second Windows user, tools must sit where that user can read them: copy `tools/netlab` to
+`C:/PBZDev/netlab` and run from there with `TEMP=C:/PBZDev`.
+
 `perf.lua` and `pair.lua` are loaded into a running copy with `eval dofile("<path>")`, and provide `PERF.*` and `PAIR.*`.
 `pair_report.py` compares two recordings.
 

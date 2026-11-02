@@ -6,7 +6,7 @@
 -- F8  spawn player 2: a second local player + a copy of player 1's character (F8-F11 need PBZCOOP_DEBUG=1)
 -- F9  remove player 2
 
-local VERSION = "1.4.2"
+local VERSION = "1.5.0"
 local TAG = "[PBZCoop] "
 if (os.getenv("PBZCOOP_INSTANCE") or "1") ~= "1" then
     TAG = "[PBZCoop#" .. os.getenv("PBZCOOP_INSTANCE") .. "] "
@@ -467,7 +467,7 @@ local function openLink()
         end
         link[name] = fn
     end
-    for _, name in ipairs({ "layout", "read", "pointer" }) do      -- only ever faster: without them, reads go through UE4SS
+    for _, name in ipairs({ "layout", "read", "pointer", "paste" }) do      -- only ever faster: without them, reads go through UE4SS
         link[name] = package.loadlib(dll, "pp_" .. name)
     end
     if not link.now() then
@@ -498,6 +498,7 @@ local api = {
     state = state,
     version = VERSION,
 }
+api.lang = dofile(SCRIPT_DIR .. "lang.lua")()
 api.game = dofile(SCRIPT_DIR .. "pbz.lua")(api)
 local coop = dofile(SCRIPT_DIR .. "coop.lua")(api)
 api.coop = coop

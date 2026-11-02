@@ -12,6 +12,7 @@ return function(api)
     local LIT_S = 3.0
     local PADS_EVERY_S = 0.15
     local APPLIED_S = 1.5
+    local REFOCUS_S = 0.5           -- back in the game: the click that brought you, and main.dll's, press nothing
     local HOLD_STEPS = 8
     local CARD_W, CARD_H = 176, 58
 
@@ -36,6 +37,7 @@ return function(api)
     local origin = { x = 0, y = 0, scale = 1, dpi = 1 }
     local dragging = nil            -- { name, dx, dy }
     local wasDown, lastTick, nextPads, appliedUntil = false, 0, 0, 0
+    local wasFocused, clicksFrom = true, 0
     local keyboardPc = nil
     local blockPlay                 -- defined below, used by press
     local wasF4, wasF5 = false, false
@@ -306,13 +308,19 @@ return function(api)
         lastTick = now
         updatePads(dt)
         measure(pc)
-        local x, y, down, esc, f4 = input()
+        local x, y, down, esc, f4, focused = input()
         if x == nil then
             drawAll()
             return
         end
+        if focused and not wasFocused then
+            clicksFrom = now + REFOCUS_S
+        end
+        wasFocused = focused
         if down and not wasDown then
-            press(x, y)
+            if focused and now >= clicksFrom then
+                press(x, y)
+            end
         elseif wasDown and not down and dragging then
             drop(x, y)
         end
@@ -335,8 +343,13 @@ return function(api)
     end
 
     function blockPlay(pc, on)
-        -- Paused, as the game's own menus are. (Turning the Soul's input off instead left it stuck at walking speed.)
-        api.gs():SetGamePaused(pc, on)
+        -- Paused, as the game's own menus are. (Turning the Soul's input off instead left it stuck at walking speed.) Not
+        -- with a partner linked: their game goes on, so this one must too.
+        if api.coop.linked() then
+            pcall(function() pc:FlushPressedKeys() end)
+        else
+            api.gs():SetGamePaused(pc, on)
+        end
         local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
         -- Every player, not only the one at the keyboard: a joystick moved on the other one grabs the cursor back.
         for _, c in ipairs({ api.getPlayer1(), api.state.p2Controller }) do
@@ -379,6 +392,7 @@ return function(api)
         end
         panel.open = true
         wasDown, dragging, lastTick, nextPads = false, nil, os.clock(), 0
+        wasFocused, clicksFrom = true, os.clock() + REFOCUS_S
         f4Armed, f4Held, escHeld = false, false, false
         os.remove(api.modDir() .. "mouse.txt")
         writeWant(true)
@@ -440,7 +454,7 @@ return function(api)
 
     -- What the online panel (onlinepanel.lua) draws and reads with: the same units, widgets and input.
     panel.kit = { W = W, H = H, origin = origin, parts = parts, part = part, place = place, hide = hide, dim = dim,
-        measure = measure, input = input, inside = inside, key = key, blockPlay = blockPlay, writeWant = writeWant }
+        picture = picture, measure = measure, input = input, inside = inside, key = key, blockPlay = blockPlay, writeWant = writeWant }
 
     return panel
 end

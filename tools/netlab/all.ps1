@@ -40,6 +40,11 @@ Step 'build' {
     Copy-Item (Join-Path $root 'native\build\relay_cli.exe') $cli -Force
 }
 
+Step 'lua check' {
+    python -I (Join-Path $PSScriptRoot 'lualint.py')
+    if ($LASTEXITCODE -ne 0) { [void]$failed.Add('lua check') }
+}
+
 Step 'relay_cli test' {
     $out = & $cli test --port ($Port + 30)
     $code = $LASTEXITCODE

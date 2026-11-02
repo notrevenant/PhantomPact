@@ -80,8 +80,13 @@ return function(api)
             hideRing()
             return
         end
-        ringWidget = ringWidget or api.hud.newImage("revive/g1_12.png", RING_SIZE, RING_SIZE)
-        timerWidget = timerWidget or api.hud.newImage("revive/t24.png", RING_SIZE, RING_SIZE)
+        -- Widgets don't survive a map change. (A gone one crashes the game when touched: pcall can't catch that.)
+        if not api.status.onScreen(ringWidget) then
+            ringWidget, ringShown = api.hud.newImage("revive/g1_12.png", RING_SIZE, RING_SIZE), nil
+        end
+        if not api.status.onScreen(timerWidget) then
+            timerWidget, timerShown = api.hud.newImage("revive/t24.png", RING_SIZE, RING_SIZE), nil
+        end
         if not (ringWidget and timerWidget) then
             return
         end

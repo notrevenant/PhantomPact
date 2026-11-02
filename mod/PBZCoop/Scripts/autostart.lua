@@ -81,8 +81,11 @@ return function(api)
     if api.revive then
         api.revive.set((settings.revive or "off"):lower() == "on")
     end
+    api.lang.set(settings.language)
+    api.partner.teleport = (settings.partnerteleport or "off"):lower() == "on"
     local role = (settings.role or "off"):lower()
     os.remove(modDir() .. "pads_watch.txt")
+    os.remove(modDir() .. "pads_want.txt")      -- left by a crash with a panel open: main.dll would think one still is
     if role == "local" then
         api.localcoop.start(tonumber(settings.joysticks) or 2)
         return
@@ -126,6 +129,12 @@ return function(api)
 
     -- The relay's thread waits for net_start.txt, which appears whole thanks to the rename. It reads the Secret and the
     -- settings both players should share from the ini itself.
+    -- The Secret counts unless it's empty or a placeholder (the relay's own test, relay.hpp).
+    local function signed(s)
+        local secret = (s.secret or ""):lower()
+        return secret ~= "" and not secret:find("^put%-") and secret ~= "off" and secret ~= "none"
+    end
+
     local function startRelay(c, s)
         if not api.link then
             setupProblem("Couldn't start the relay: dlls\\main.dll can't be reached. Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide.")
@@ -146,10 +155,8 @@ return function(api)
         local joining = c.modRole ~= "client" and ""
             or c.hostAddress ~= "" and (", joining " .. c.hostAddress)
             or ", looking for a Steam friend who's hosting"
-        local secret = s.secret or ""
-        local signed = secret ~= "" and not secret:upper():find("^PUT%-") and secret:lower() ~= "off"
         log("Relay started as " .. c.role .. joining .. (c.steam and " over Steam" or (" on UDP " .. c.port))
-            .. (signed and ", packets signed (Secret set)" or "") .. ".")
+            .. (signed(s) and ", packets signed (Secret set)" or "") .. ".")
         return true
     end
 
@@ -181,6 +188,7 @@ return function(api)
                 current.on = true
                 local s = current.settings
                 neton(current.modRole)
+                api.partner.goOnLink(current.modRole == "client")
                 log("Phantom Pact " .. (current.modRole == "host" and "Host" or "Guest") .. ": co-op on.")
                 if api.scaling and (tonumber(s.coopenemyhealth) or tonumber(s.coopenemyposture)) then
                     api.scaling.command(string.format("%d %d", tonumber(s.coopenemyhealth) or 150,
@@ -217,6 +225,7 @@ return function(api)
     api.online = {
         settings = readSettings,
         connection = connection,
+        signed = signed,
         current = function()
             return current
         end,
@@ -230,8 +239,12 @@ return function(api)
         end,
     }
 
-    if (settings.onlinepanel or "off"):lower() == "on" then
+    if role ~= "local" and (settings.onlinepanel or "on"):lower() == "on" then
         api.onlinepanel.start()
+    end
+    -- Also with Role = Off: the panel can start co-op later, and F3 only acts once connected.
+    if role ~= "local" then
+        api.partner.start()
     end
 
     local c, why = connection(settings, role)

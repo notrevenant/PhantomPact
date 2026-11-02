@@ -107,6 +107,7 @@ local function abilityClass()
 end
 
 function FIGHT.swing()
+    if FIGHT.use("BP_SwitchAttack_Default_C") == "true" then return "swing true" end   -- what the attack key starts
     local c, asc = abilityClass()
     if not valid(c) then return "no attack ability" end
     return "swing " .. tostring(asc:TryActivateAbilityByClass(c, true))
@@ -354,7 +355,7 @@ function FIGHT.doing(e)
             pos = ai:Montage_GetPosition(mo) or 0
         end
     end)
-    local ab = game.activeAbility(e, function(n) return n:find("Passive") or n:find("Locomotion") or n:find("SpaceState") or n:find("Stance") or n:find("Utilities") end)
+    local ab = game.activeAbility(e, function(n) return n:find("Passive") or n:find("Subtitles") or n:find("Locomotion") or n:find("SpaceState") or n:find("Stance") or n:find("Utilities") end)
     return string.format("montage %s @%.2f ability %s", m, pos, tostring(ab and ab:match("[^%.]+$")))
 end
 

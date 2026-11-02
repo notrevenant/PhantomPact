@@ -18,7 +18,7 @@ Install UE4SS for Phantom Blade Zero (see Requirements): put dwmapi.dll and the 
 Extract everything in the zip into the game’s PBZ folder and say yes to merging folders. The mod lands in platform\steam\ue4ss\Mods\PBZCoop.
 Open platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini in Notepad. Host: change Role = Guest to Role = Host. Friend: set HostAddress to the host’s Tailscale IP (it starts with 100. and is shown in the host’s Tailscale app).
 Start the game and load your saves, the host first. Co-op starts by itself once you’re in the world. The first time you host, Windows asks whether the game may use the network: click Allow.
-In testing: with OnlinePanel = On in the ini, F4 opens a panel that hosts, joins or leaves with no restart. Joining over Tailscale still needs HostAddress in the ini.
+F5 opens a panel in the game, in English or Chinese: pick Steam, Tailscale or another network, then Host or Guest, with no text file and no restart. Paste the address and an optional password from the clipboard. Joining takes you to the host, even on another map. MORE holds the options, and TP > PARTNER there puts going to your partner on F3.
 
 Updating: both players update. Extract the new version over the old one, then set Role and HostAddress again.
 Playing alone: set Role = Off.
@@ -30,7 +30,8 @@ See your partner’s Soul live, with their moves, attacks, dodges and hit reacti
 Shared enemies: the same enemies in both worlds, with shared health, posture and executions
 Your partner’s hits land in the host’s world, so you can fight the same enemy together
 Shared boss fights: boss health bar and arena fog walls for both players
-Shared loot: when your partner picks up an item, you get it too
+Boss fights wait for everyone: die and you watch your partner until it's over; join during one and you watch, then go to them
+Shared loot: when your partner picks up an item, opens a chest or searches a pile, you get it too
 Shared dust: dust earned by either player goes to both
 Shared resting: rest at a bell and enemies respawn for both
 Your partner disappears while they’re down or on another map, and comes back when they return
@@ -38,14 +39,14 @@ Your partner disappears while they’re down or on another map, and comes back w
 Local co-op (split screen, in testing): two players on one PC, one pad each or keyboard plus pad. Set Role = Local.
 Player 2 climbs, opens chests, rings bells, drinks from the gourd and fights on their own; enemies notice and fight a
 lone player 2; menus and the game's screens are shared; bosses get a health bar on player 2's half. F4 in the game
-opens the panel for screen layout and pads. Details: docs/LOCAL_COOP.md on GitHub.
+opens the panel for screen layout and pads. It's in the same download: see Phantom Pact - LOCAL CO-OP.md in the zip.
 
 ## Requirements
 
 Phantom Blade Zero on Steam, for both players
 UE4SS for Phantom Blade Zero 1.0.1 by Vercadi (Nexus Mods), for both players
 To connect: both use Tailscale (tailscale.com), signed in to the same network, or another virtual LAN
-Both players on the same Phantom Pact version: 1.4.1 or older can’t connect to 1.4.2
+Both players on the same Phantom Pact version: 1.4.1 or older can’t connect to 1.5.0
 No Python needed: the connection runs inside the game
 
 Early release, 2 players. The host leads into new areas and boss arenas. Cutscenes, dialogue and spending dust aren’t shared yet. Don’t press Ctrl+R (UE4SS hot reload) while playing together; restart the game instead.

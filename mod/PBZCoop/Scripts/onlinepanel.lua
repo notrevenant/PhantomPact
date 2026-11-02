@@ -1,4 +1,4 @@
--- The online panel (F4 with any Role but Local): host, join or leave from inside the game, with no ini to edit and no
+-- The online panel (F5 with any Role but Local): host, join or leave from inside the game, with no ini to edit and no
 -- restart. It's drawn and read as the local co-op panel is (panel.lua, whose notes on the mouse hold here too): pictures
 -- from art/make_online_panel.py, and the words that change in the game's own ink-bar text. autostart.lua does the
 -- connecting (api.online); this file picks what to ask for, keeps it in PhantomPact.ini and says how it's going.
@@ -6,24 +6,45 @@
 return function(api)
     local log, valid, hud, game, kit = api.log, api.valid, api.hud, api.game, api.panel.kit
 
-    local KEY_MS = 40               -- how often F4 is looked at; a press lasts longer
+    local KEY_MS = 40               -- how often F5 is looked at; a press lasts longer
     local TICK_MS = 15
     local WORDS_S = 0.5
     local NO_MOUSE_S = 3.0          -- no answer from main.dll for this long: the panel couldn't be closed by hand
+    local REFOCUS_S = 0.5           -- back in the game: the click that brought you, and main.dll's, press nothing
     local Z = 900
     local CARD_W, CARD_H = 176, 58
     local BUTTON_W, BUTTON_H = 170, 46
     local WORDS_Y = 155             -- middle of the status box, in panel units
     local TIP_FROM_BOTTOM = 30      -- where the game lays out the ink-bar text: centred, this far above the screen's bottom
     local CLOSE = { x = 848, y = 14, w = 38, h = 38 }
-    -- Nothing at the panel's middle: main.dll clicks there once as it opens (see free_cursor).
-    local CONNECT = { steam = { x = 40, y = 244 }, tailscale = { x = 228, y = 244 } }
+    -- main.dll clicks the panel's middle as it opens and on coming back to the game (see free_cursor): no click counts for
+    -- REFOCUS_S then.
+    local CONNECT = { steam = { x = 40, y = 244 }, tailscale = { x = 228, y = 244 }, other = { x = 416, y = 244 } }
+    local PASTE = { x = 604, y = 244 }
+    local PASSWORD = { x = 604, y = 344 }
     local BUTTONS = { host = { x = 40, y = 350 }, join = { x = 228, y = 350 }, leave = { x = 416, y = 350 } }
+    local LANGUAGE = { en = { x = 40, y = 18 }, zh = { x = 124, y = 18 } }
+    local LANGUAGE_W, LANGUAGE_H = 76, 30
+
+    local SETTINGS = { x = 690, y = 494 }
+    local BACK = { x = 40, y = 494 }
+    local OPTION_W, OPTION_H = 124, 40
+    local OPTION_X, OPTION_STEP = 300, 136
+    -- The gameplay options: a row per setting, top to bottom on the settings page.
+    local ROWS = {
+        { name = "teleport", y = 104, choices = { "off", "on" } },
+        { name = "pvp", y = 228, choices = { "off", "on" } },
+        { name = "compass", y = 290, choices = { "off", "on" } },
+        { name = "mapicon", y = 352, choices = { "off", "on" } },
+        { name = "direct", y = 414, choices = { "off", "on" } },
+    }
 
     local panel = { open = false }
     local choice = { connect = "tailscale" }
     local pc = nil
-    local wasF4, wasDown, f4Armed, f4Held, escHeld = false, false, false, false, false
+    local wasKey, wasDown, keyArmed, keyHeld, escHeld = false, false, false, false, false
+    local wasFocused, clicksFrom = false, 0
+    local page, options, loggedWords, hasPassword = "main", {}, nil, false
     local words, wordsWidget, wordsAt, note, mouseAt = nil, nil, 0, nil, 0
 
     ------------------------------------------------------------------ PhantomPact.ini
@@ -70,8 +91,66 @@ return function(api)
         end
     end
 
+    -- Other network: any virtual LAN whose addresses the host's filter wouldn't know (ZeroTier, UU Accelerator).
     local function connectIn(settings)
-        return (settings and settings.connect or "tailscale"):lower() == "steam" and "steam" or "tailscale"
+        if (settings and settings.connect or "tailscale"):lower() == "steam" then
+            return "steam"
+        end
+        return (settings and settings.allowanyaddress or "off"):lower() == "on" and "other" or "tailscale"
+    end
+
+    local function network(name)
+        return { Connect = name == "steam" and "Steam" or "Tailscale", AllowAnyAddress = name == "other" and "On" or "Off" }
+    end
+
+    ------------------------------------------------------------------ the settings page
+
+    local function readOptions()
+        local s = api.online.settings() or {}
+        local function onOff(value, default)
+            return (value or default):lower() == "on" and "on" or "off"
+        end
+        options = {
+            teleport = onOff(s.partnerteleport, "off"),
+            pvp = onOff(s.pvp, "off"),
+            compass = onOff(s.partnercompass, "on"),
+            mapicon = onOff(s.partnermapicon, "on"),
+            direct = onOff(s.steamdirect, "off"),
+        }
+    end
+
+    -- Kept in PhantomPact.ini, and in force at once. (Steam Direct from the next connection: the relay reads it as it starts.)
+    local function choose(row, value)
+        options[row] = value
+        local on = value == "on"
+        local word = on and "On" or "Off"
+        if row == "teleport" then
+            save({ PartnerTeleport = word })
+            api.partner.teleport = on
+        elseif row == "pvp" then
+            save({ PvP = word })
+            api.pvp.command(on and "on" or "off")
+        elseif row == "compass" then
+            save({ PartnerCompass = word })
+            api.hud.set(on)
+        elseif row == "mapicon" then
+            save({ PartnerMapIcon = word })
+            api.mapicon.on = on
+        elseif row == "direct" then
+            save({ SteamDirect = word })
+        end
+    end
+
+    local function showPage(name)
+        page = name
+        for _, p in pairs(kit.parts) do
+            hud.show(p.widget, false)
+        end
+        hud.show(wordsWidget, false)
+        words = nil
+        if name == "settings" then
+            readOptions()
+        end
     end
 
     ------------------------------------------------------------------ what's going on, in plain words
@@ -128,9 +207,14 @@ return function(api)
             pcall(function() wordsWidget:PlayAnimation(wordsWidget.FadeIn, 0, 1, 0, 1, false) end)
         end
         if text ~= words then
+            -- (The ping moves all the time: logged only when something else changes.)
+            local plain = text:gsub("%d+ ms", "")
+            if plain ~= loggedWords then
+                loggedWords = plain
+                log("Online panel: " .. text)
+            end
             words = text
-            wordsWidget:SetText(FText(text))
-            log("Online panel: " .. text)
+            wordsWidget:SetText(FText(api.lang.say(text)))
         end
         -- Moved as a picture, up from where the game lays it out: its own layout fills the screen and stays as it is.
         local o = kit.origin
@@ -150,7 +234,7 @@ return function(api)
             return
         end
         local settings = api.online.settings() or {}
-        settings.connect = choice.connect
+        settings.connect = choice.connect == "steam" and "steam" or "tailscale"
         local c, why = api.online.connection(settings, what == "host" and "host" or "guest")
         if not c then
             note = why
@@ -158,17 +242,83 @@ return function(api)
             return
         end
         -- Saved first: the relay reads the ini as it starts.
-        save({ Role = what == "host" and "Host" or "Guest", Connect = choice.connect == "steam" and "Steam" or "Tailscale" })
+        local values = network(choice.connect)
+        values.Role = what == "host" and "Host" or "Guest"
+        save(values)
         api.online.start(c, settings)
+    end
+
+    local function clipboard()
+        return ((api.link and api.link.paste and api.link.paste() or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+    end
+
+    -- Tailscale's own menu copies your address: the host sends it, and the guest needs no text file for it.
+    local function pasteAddress()
+        local text = clipboard()
+        wordsAt = 0
+        if text == "" or #text > 64 or text:find('[%s"%%&|<>^]') then
+            note = "Copy the host's address first, then press Paste."
+            return
+        end
+        save({ HostAddress = text })
+        note = "Host address set to " .. text .. "."
+    end
+
+    -- The Secret, which the relay reads from the ini as it starts. Pressed again it goes. It's never shown or logged.
+    local function pressPassword()
+        wordsAt = 0
+        if hasPassword then
+            save({ Secret = "" })
+            hasPassword = false
+            note = "Password removed."
+            return
+        end
+        local text = clipboard()
+        if #text > 128 or text:find("%c") or not api.online.signed({ secret = text }) then
+            note = "Copy the password first, then press Paste password."
+            return
+        end
+        save({ Secret = text })
+        hasPassword = true
+        note = "Password set. Your partner needs the same one."
+    end
+
+    local function setLanguage(code)
+        api.lang.set(code == "zh" and "Chinese" or "English")
+        save({ Language = api.lang.word() })
+        words, wordsAt = nil, 0
     end
 
     local function running()
         return api.online and api.online.current() ~= nil
     end
 
+    local function pressSettings(x, y)
+        if kit.inside(x, y, BACK, BUTTON_W, BUTTON_H) then
+            showPage("main")
+            return
+        end
+        for _, row in ipairs(ROWS) do
+            for i, value in ipairs(row.choices) do
+                local at = { x = OPTION_X + (i - 1) * OPTION_STEP, y = row.y }
+                if value ~= options[row.name] and kit.inside(x, y, at, OPTION_W, OPTION_H) then
+                    choose(row.name, value)
+                end
+            end
+        end
+    end
+
     local function press(x, y)
         if kit.inside(x, y, CLOSE) then
             panel.close()
+            return
+        end
+        if page == "settings" then
+            pressSettings(x, y)
+            return
+        end
+        if kit.inside(x, y, SETTINGS, BUTTON_W, BUTTON_H) then
+            showPage("settings")
             return
         end
         for name, r in pairs(BUTTONS) do
@@ -181,39 +331,91 @@ return function(api)
                 end
             end
         end
+        for code, r in pairs(LANGUAGE) do
+            if code ~= api.lang.code and kit.inside(x, y, r, LANGUAGE_W, LANGUAGE_H) then
+                setLanguage(code)
+            end
+        end
+        if not running() and kit.inside(x, y, PASSWORD, CARD_W, CARD_H) then
+            pressPassword()
+        end
+        if choice.connect ~= "steam" and not running() and kit.inside(x, y, PASTE, CARD_W, CARD_H) then
+            pasteAddress()
+        end
         for name, r in pairs(CONNECT) do
             if not running() and name ~= choice.connect and kit.inside(x, y, r, CARD_W, CARD_H) then
                 choice.connect = name
                 note, wordsAt = nil, 0
-                save({ Connect = name == "steam" and "Steam" or "Tailscale" })
+                save(network(name))
             end
         end
     end
 
     ------------------------------------------------------------------ on screen
 
+    -- A picture with words on it, in the language picked.
+    local function worded(name, tex, w, h, z)
+        tex = (api.lang.code == "zh" and "zh_" or "") .. tex
+        local p = kit.part(name, tex, w, h, z)
+        kit.picture(p, tex)
+        return p
+    end
+
+    local function drawSettings()
+        kit.place(worded("on_bg2", "online_settings_bg", kit.W, kit.H, 0), 0, 0)
+        kit.place(kit.part("on_close", "close", CLOSE.w, CLOSE.h, 1), CLOSE.x, CLOSE.y)
+        kit.place(worded("on_back", "online_back", BUTTON_W, BUTTON_H, 1), BACK.x, BACK.y)
+        for _, row in ipairs(ROWS) do
+            for i, value in ipairs(row.choices) do
+                local x = OPTION_X + (i - 1) * OPTION_STEP
+                kit.place(worded("on_" .. row.name .. "_" .. value, "opt_" .. value, OPTION_W, OPTION_H, 1), x, row.y)
+                if value == options[row.name] then
+                    kit.place(kit.part("on_sel_" .. row.name, "sel_opt", OPTION_W, OPTION_H, 2), x, row.y)
+                end
+            end
+        end
+    end
+
     local function drawAll()
         local c = api.online and api.online.current()
-        kit.place(kit.part("on_bg", "online_bg", kit.W, kit.H, 0), 0, 0)
+        kit.place(worded("on_bg", "online_bg", kit.W, kit.H, 0), 0, 0)
         kit.place(kit.part("on_close", "close", CLOSE.w, CLOSE.h, 1), CLOSE.x, CLOSE.y)
+        for code, r in pairs(LANGUAGE) do
+            kit.place(kit.part("on_lang_" .. code, "online_lang_" .. code, LANGUAGE_W, LANGUAGE_H, 1), r.x, r.y)
+        end
+        local lang = LANGUAGE[api.lang.code]
+        kit.place(kit.part("on_sel_lang", "sel_lang", LANGUAGE_W, LANGUAGE_H, 2), lang.x, lang.y)
         for name, r in pairs(CONNECT) do
-            local p = kit.part("on_" .. name, "online_" .. name, CARD_W, CARD_H, 1)
+            local p = worded("on_" .. name, "online_" .. name, CARD_W, CARD_H, 1)
             kit.place(p, r.x, r.y)
             kit.dim(p, (c and name ~= choice.connect) and 0.3 or 1.0)
         end
         local at = CONNECT[choice.connect]
         kit.place(kit.part("on_sel_card", "sel_card", CARD_W, CARD_H, 2), at.x, at.y)
-        for name, r in pairs(BUTTONS) do
-            local p = kit.part("on_" .. name, "online_" .. name, BUTTON_W, BUTTON_H, 1)
-            kit.place(p, r.x, r.y)
-            kit.dim(p, (name == "leave" and not c) and 0.35 or 1.0)
-        end
-        local mine = c and BUTTONS[c.modRole == "host" and "host" or "join"]
-        if mine then
-            kit.place(kit.part("on_sel_button", "sel_button", BUTTON_W, BUTTON_H, 2), mine.x, mine.y)
+        if choice.connect ~= "steam" then
+            local p = worded("on_paste", "online_paste", CARD_W, CARD_H, 1)
+            kit.place(p, PASTE.x, PASTE.y)
+            kit.dim(p, c and 0.3 or 1.0)
         else
-            kit.hide("on_sel_button")
+            kit.hide("on_paste")
         end
+        local key = worded("on_password", hasPassword and "online_password_set" or "online_password", CARD_W, CARD_H, 1)
+        kit.place(key, PASSWORD.x, PASSWORD.y)
+        kit.dim(key, c and 0.3 or 1.0)
+        -- Your role is the red one.
+        local mine = c and (c.modRole == "host" and "host" or "join")
+        for name, r in pairs(BUTTONS) do
+            if name == mine then
+                kit.hide("on_" .. name)
+                kit.place(worded("on_" .. name .. "_on", "online_" .. name .. "_on", BUTTON_W, BUTTON_H, 1), r.x, r.y)
+            else
+                kit.hide("on_" .. name .. "_on")
+                local p = worded("on_" .. name, "online_" .. name, BUTTON_W, BUTTON_H, 1)
+                kit.place(p, r.x, r.y)
+                kit.dim(p, (name == "leave" and not c) and 0.35 or 1.0)
+            end
+        end
+        kit.place(worded("on_settings", "online_settings", BUTTON_W, BUTTON_H, 1), SETTINGS.x, SETTINGS.y)
     end
 
     local function tick()
@@ -225,7 +427,7 @@ return function(api)
             return
         end
         kit.measure(pc)
-        local x, y, down, esc, f4, focused = kit.input()
+        local x, y, down, esc, key, focused = kit.input()
         if x ~= nil then
             mouseAt = os.clock()
         elseif os.clock() - mouseAt > NO_MOUSE_S then
@@ -233,22 +435,30 @@ return function(api)
             panel.close()
             return
         end
+        if focused and not wasFocused then
+            clicksFrom = os.clock() + REFOCUS_S
+        end
+        wasFocused = focused
         if x ~= nil and focused then
-            if down and not wasDown then
+            if down and not wasDown and os.clock() >= clicksFrom then
                 press(x, y)
             end
             wasDown = down
             if not panel.open then
                 return
             end
-            -- Closed on the key's release, so the game doesn't see it go down too. The F4 that opened it doesn't count.
-            f4Armed = f4Armed or not f4
-            f4Held = f4Held or (f4Armed and f4)
-            if (escHeld and not esc) or (f4Held and not f4) then
+            -- Closed on the key's release, so the game doesn't see it go down too. The F5 that opened it doesn't count.
+            keyArmed = keyArmed or not key
+            keyHeld = keyHeld or (keyArmed and key)
+            if (escHeld and not esc) or (keyHeld and not key) then
                 panel.close()
                 return
             end
             escHeld = esc
+        end
+        if page == "settings" then
+            drawSettings()
+            return
         end
         drawAll()
         showWords(os.clock())
@@ -266,7 +476,9 @@ return function(api)
             return
         end
         pc = controller
-        choice.connect = connectIn(api.online.settings())
+        local settings = api.online.settings()
+        choice.connect = connectIn(settings)
+        hasPassword = api.online.signed(settings or {})
         -- Widgets don't survive a map change.
         for name, p in pairs(kit.parts) do
             if not api.status.onScreen(p.widget) then
@@ -274,7 +486,8 @@ return function(api)
             end
         end
         panel.open = true
-        wasDown, f4Armed, f4Held, escHeld = false, false, false, false
+        page = "main"
+        wasDown, keyArmed, keyHeld, escHeld, wasFocused, clicksFrom = false, false, false, false, true, os.clock() + REFOCUS_S
         words, wordsAt, mouseAt = nil, 0, os.clock()
         os.remove(api.modDir() .. "mouse.txt")
         kit.writeWant(true)
@@ -295,18 +508,18 @@ return function(api)
         log("Online panel closed.")
     end
 
-    -- F4 is read on the game thread, as in panel.lua. Only from here on does Lua look at it: never with Role = Local.
+    -- F5 is read on the game thread, as in panel.lua. Only from here on does Lua look at it: never with Role = Local.
     local function readKey()
         local controller, pawn = api.getPlayer1()
         if not valid(pawn) then
-            wasF4 = false
+            wasKey = false
             return
         end
-        local f4 = controller:IsInputKeyDown(kit.key("F4"))
-        if f4 and not wasF4 and not panel.open then
+        local key = controller:IsInputKeyDown(kit.key("F5"))
+        if key and not wasKey and not panel.open then
             panel.show()
         end
-        wasF4 = f4
+        wasKey = key
     end
 
     local function guarded(fn)
@@ -333,7 +546,7 @@ return function(api)
 
     panel.describe = describe       -- for tools/netlab/bench/online-panel.ps1
 
-    -- onlinepanel toggle|host|join|leave|steam|tailscale|press <x> <y>: what the keys and the mouse do, for tests.
+    -- onlinepanel toggle|host|join|leave|steam|tailscale|other|press <x> <y>: what the keys and the mouse do, for tests.
     function panel.command(rest)
         local word, x, y = (rest or ""):match("^(%S*)%s*(%S*)%s*(%S*)")
         if word == "toggle" then

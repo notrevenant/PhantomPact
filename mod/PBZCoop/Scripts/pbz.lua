@@ -332,9 +332,18 @@ return function(api)
         return id
     end
 
-    -- Guest copies of the host's enemies: their own AI stays out of it (puppets.lua).
-    function game.stopAI(actor)
-        pcall(function() actor:GetController().BrainComponent:StopLogic("PhantomPact") end)
+    -- Guest copies of the host's enemies: their own AI stays out of it (puppets.lua). The game starts a stopped AI again
+    -- by itself, so this is asked again and again: pass the brain it returned last time.
+    function game.stopAI(actor, brain)
+        pcall(function()
+            if not valid(brain) then
+                brain = actor:GetController().BrainComponent
+            end
+            if brain:IsRunning() then
+                brain:StopLogic("PhantomPact")
+            end
+        end)
+        return brain
     end
 
     function game.startAI(actor)
@@ -472,6 +481,8 @@ return function(api)
 
     -- The bar we put up for the other PC's fight can go without a word (no UnRegisterBossHPBar: a mirrored boss has no
     -- fight of its own here). Asked about once a second while such a fight goes on.
+    local BAR_TRIES = 3
+    local barTries = {}
     function game.keepBossBar(boss)
         local addr = boss:GetAddress()
         local shown = false
@@ -486,7 +497,14 @@ return function(api)
                 end
             end
         end)
-        if not shown then
+        if shown then
+            barTries[addr] = nil
+        else
+            -- (Asked again and again it flickers, like a second bar: the game may simply not want one here.)
+            barTries[addr] = (barTries[addr] or 0) + 1
+            if barTries[addr] > BAR_TRIES then
+                return false
+            end
             bosses[addr] = nil
             game.showBossBar(boss)
             local hp, maxhp = game.getHealth(boss)
@@ -497,6 +515,15 @@ return function(api)
             end)
         end
         return shown
+    end
+
+    -- The host's maximum on a copy, its share of health left as it is: game.setHealth follows on its own.
+    function game.setMaxHealth(actor, maxhp)
+        pcall(function()
+            local mx = actor.AttributeSetBase.Health_Max
+            mx.BaseValue = maxhp
+            mx.CurrentValue = maxhp
+        end)
     end
 
     function game.setHealth(actor, hp)
@@ -601,12 +628,20 @@ return function(api)
         end
     end
 
-    -- The player's own death, the game's normal flow (screen, respawn, refresh). Kill with the game-logic reason
-    -- leaves a player alive at their health.
+    -- The player's own death, the game's normal flow (screen, respawn, refresh): the game's own kill effect. A player has
+    -- no Kill, and health set to 0 by hand only leaves them lying there with no way back.
+    local KILL_EFFECT = "/Game/PBZContent/Blueprint/Ability/GameplayEffects/GE_Kill"
     function game.killPlayer(pawn)
         game.setMinHealth(pawn, 0)
-        game.setHealth(pawn, 0)
-        local ok, err = pcall(function() pawn:Kill(DIE_DAMAGED) end)
+        local ok, err = pcall(function()
+            local effect = StaticFindObject(KILL_EFFECT .. ".GE_Kill_C")
+            if not valid(effect) then
+                LoadAsset(KILL_EFFECT)
+                effect = StaticFindObject(KILL_EFFECT .. ".GE_Kill_C")
+            end
+            StaticFindObject("/Script/GameplayAbilities.Default__AbilitySystemBlueprintLibrary")
+                :GetAbilitySystemComponent(pawn):BP_ApplyGameplayEffectToSelf(effect, 1.0, {})
+        end)
         if not ok then
             log("Kill failed: " .. tostring(err))
         end
@@ -706,31 +741,38 @@ return function(api)
         return dust, items, level
     end
 
-    -- One item of a loot roll, into this player's backpack. Weapons have their own way in; anything else that isn't a
-    -- prop goes through the player's GiveItem.
-    function game.grantLoot(pawn, itemId, kind)
+    -- One item of a loot roll, into this player's backpack. Weapons, medicines and accessories each have their own way in.
+    -- (GiveItem answers without complaint and adds neither of the last two.)
+    function game.grantLoot(pawn, itemId, kind, count)
+        count = count or 1
         local bp = valid(pawn) and worldSubsystem(pawn, "/Script/ProjectPBZ.PBZBackPackSubsystem")
         if not bp then
             return
         end
+        game.granting = true        -- (what the mod adds isn't sent back: see "what the game gives")
         if kind == "weapon" or kind == "weapon2" then
             pcall(function() bp:AddWeaponItem(FName(itemId), kind == "weapon", true, false, false) end)
             log("Shared loot: weapon " .. itemId)
-        elseif kind == "medicine" or kind == "accessory" then
-            pcall(function() pawn:GiveItem(FName(itemId), 1) end)
-            log("Shared loot: " .. kind .. " " .. itemId)
+        elseif kind == "medicine" then
+            pcall(function() bp:PushMedicineToInventory(FName(itemId), false, true) end)
+            log("Shared loot: medicine " .. itemId)
+        elseif kind == "accessory" then
+            pcall(function() bp:PushAccessoryToInventory(FName(itemId), false) end)
+            log("Shared loot: accessory " .. itemId)
         else
             -- AddPropsToBackPack is the backpack's own entry point; if the item count didn't move (seen in the
             -- prologue map, which keeps its own restricted backpack), fall back to the player's GiveItem.
+            -- (Notes and keys, R_ and I_, aren't counted in the backpack: no second try for those.)
             local before = game.itemCount(bp, itemId)
-            pcall(function() bp:AddPropsToBackPack(1, FName(itemId), true) end)
+            pcall(function() bp:AddPropsToBackPack(count, FName(itemId), true) end)
             local after = game.itemCount(bp, itemId)
-            if after <= before then
-                pcall(function() pawn:GiveItem(FName(itemId), 1) end)
+            if after <= before and not itemId:find("^[RI]_%d") then
+                pcall(function() pawn:GiveItem(FName(itemId), count) end)
                 after = game.itemCount(bp, itemId)
             end
-            log(string.format("Shared loot: %s (%d -> %d)", itemId, before, after))
+            log(string.format("Shared loot: %s x%d (%d -> %d)", itemId, count, before, after))
         end
+        game.granting = false
     end
 
     game.commands.lootlevel = function(arg)
@@ -998,10 +1040,10 @@ return function(api)
                     -- Own pcall: an error must never unwind through UE4SS's ForEach.
                     pcall(function()
                         local s = spec:get()
-                        if found == nil and s.ActiveCount > 0 then
+                        if s.ActiveCount > 0 then
                             local path = s.Ability:GetClass():GetFullName():gsub("^%S+ ", "")
                             if not passive(path) then
-                                found = path
+                                found = path    -- the last: a move made of steps runs each as an ability of its own, given later
                             end
                         end
                     end)
@@ -1011,7 +1053,24 @@ return function(api)
         return found
     end
 
-    -- An ability the actor was already given, by class path. False when it has none such or it won't start.
+    local function hasAbility(asc, cls)
+        local name, has = cls:GetFName():ToString(), false
+        pcall(function()
+            asc.ActivatableAbilities.Items:ForEach(function(_, spec)
+                pcall(function()
+                    if spec:get().Ability:GetClass():GetFName():ToString() == name then
+                        has = true
+                    end
+                end)
+            end)
+        end)
+        return has
+    end
+
+    -- An ability by class path. False when it won't start. The game hands an enemy its moves as its AI goes along, and a
+    -- guest's copy has its AI stopped, so more than half of what the host's enemy did wasn't there to replay: it's given
+    -- here, once per copy and move.
+    local movesLookedAt = {}      -- enemy address .. class path -> true
     function game.playAbility(actor, classPath)
         if not classPath:match("^/[%w_/%-]+%.[%w_%-]+$") or #classPath > 256 then
             return false
@@ -1021,8 +1080,23 @@ return function(api)
         if not (asc and valid(cls)) then
             return false
         end
-        local ok, activated = pcall(function() return asc:TryActivateAbilityByClass(cls, true) end)
-        return ok and activated == true
+        local function start()
+            local ok, activated = pcall(function() return asc:TryActivateAbilityByClass(cls, true) end)
+            return ok and activated == true
+        end
+        if start() then
+            return true
+        end
+        local key = actor:GetAddress() .. classPath
+        if movesLookedAt[key] then
+            return false
+        end
+        movesLookedAt[key] = true
+        return not hasAbility(asc, cls) and pcall(function() asc:K2_GiveAbility(cls, 1, -1) end) and start()
+    end
+
+    function game.forgetMoves()
+        movesLookedAt = {}
     end
 
     ------------------------------------------------------------------ hit reactions
@@ -1127,7 +1201,8 @@ return function(api)
     local HIT_STATE_HOLD_S = 0.9
     clearHitStateLater = function(comp, tag)
         game.after(HIT_STATE_HOLD_S, function()
-            if comp:GetCurrentHitState().TagName:ToString() == tag then
+            -- (A map can load first, and a gone object's memory gets reused: pcall can't catch that crash, valid can.)
+            if valid(comp) and comp:GetCurrentHitState().TagName:ToString() == tag then
                 comp:ChangeHitState({ TagName = FName("None") }, nil, false)
             end
         end)
@@ -1280,6 +1355,9 @@ return function(api)
             end)
             local start = os.clock()
             local function frame()
+                if not valid(w) then
+                    return
+                end
                 t = os.clock() - start
                 local a = math.min(1, t / 0.5)
                 local ease = 1 - (1 - a) * (1 - a)            -- fast landing, soft settle
@@ -1298,7 +1376,9 @@ return function(api)
         local mine = aliveHideAt
         game.after(seconds or 6, function()
             if aliveHideAt == mine then
-                aliveScreen:SetVisibility(1)
+                if valid(aliveScreen) then
+                    aliveScreen:SetVisibility(1)
+                end
                 aliveHideAt = nil
             end
         end)
@@ -1378,6 +1458,163 @@ return function(api)
                 hm:AddActorToHatredList(ghost, {})
             end
         end)
+    end
+
+    ------------------------------------------------------------------ who an enemy goes for
+
+    -- An enemy's own script picks its target: the nearest on its hatred list, looked at again each time it's hit or starts a
+    -- move, 1.5 s after the last change. With two players in a fight that flips all the time and it looks lost. So an enemy
+    -- near both stays on one for FOCUS_S, by making that cooldown longer. After that it turns to the other player if they
+    -- hit it lately; if not, the script goes on as it does. The script does the turning, with the other player off the
+    -- list for that moment.
+    local FOCUS_S = 15.0
+    local FOCUS_HIT_S = 2.0       -- a hit this recent counts
+    local FOCUS_REACH_CM = GHOST_AGGRO_CM   -- farther off than this a player isn't in this fight
+    local focused = {}            -- enemy address -> { picker, onGuest, since, hp }
+    local hitByPartner = {}       -- enemy address -> os.clock() of the partner's last hit
+
+    local function targetPicker(actor)
+        local found = nil
+        pcall(function()
+            actor.Controller.SGameAIComponent.SpawnedAIScripts:ForEach(function(_, element)
+                pcall(function()
+                    local script = element:get()
+                    if found == nil and valid(script) and script:GetClass():GetFName():ToString() == "AIScript_TargetSelector_C" then
+                        found = script
+                    end
+                end)
+            end)
+        end)
+        return found
+    end
+
+    local function currentTarget(actor)
+        local out = {}
+        local ok = pcall(function()
+            StaticFindObject("/Script/SGameAI.Default__SGameAIFunctionLibrary"):GetTargetActor(actor.Controller, out)
+        end)
+        return ok and valid(out.Target) and out.Target or nil
+    end
+
+    local function turnTo(actor, picker, want, other)
+        local hatred = actor.BP_PBZHatredManagerComponent
+        if not valid(hatred) or hatred:CheckCanHatredTarget(want) == false then
+            return
+        end
+        hatred:AddActorToHatredList(want, {})
+        hatred:RemoveActorFromHatredList(other)
+        picker.LastSwitchTime = 0
+        picker:TrySwitchTarget()
+        hatred:AddActorToHatredList(other, {})
+    end
+
+    -- Host: who this enemy is after, as "host", "guest" or "-".
+    function game.enemyAfter(actor, ghost)
+        local target = currentTarget(actor)
+        if target == nil then
+            return "-"
+        end
+        return valid(ghost) and target:GetAddress() == ghost:GetAddress() and "guest" or "host"
+    end
+
+    -- Guest: a move lunges at its enemy's target, so a copy with none fell short of the host's and was dragged the rest of the
+    -- way, attack pose and all. It's given the host's target, and its own picker is told to leave that alone.
+    local copyPickers = {}        -- enemy address -> its target picker
+    local TARGET_KEY = "AI.BlackboardKey.Object.TargetActor"
+    local LONG_S = 86400.0
+    function game.aimCopy(actor, addr, target)
+        pcall(function()
+            local picker = copyPickers[addr]
+            if not valid(picker) then
+                picker = targetPicker(actor)
+                copyPickers[addr] = picker
+            end
+            if picker then
+                picker.SwitchTargetCooldown = LONG_S
+                picker.LastSwitchTime = api.gs():GetTimeSeconds(actor)
+            end
+            StaticFindObject("/Script/SGameAI.Default__SGameAIFunctionLibrary"):SetValueAsObjectByTag(actor.Controller.Blackboard,
+                { TagName = FName(TARGET_KEY) }, target)
+        end)
+    end
+
+    function game.partnerHit(addr)
+        hitByPartner[addr] = os.clock()
+    end
+
+    function game.forgetFocus()
+        focused, hitByPartner = {}, {}
+    end
+
+    function game.steerFocus(actor, addr, x, y, z, hp, pawn, ghost)
+        local at = { X = x, Y = y, Z = z }
+        if not x or distance(at, pawn:K2_GetActorLocation()) > FOCUS_REACH_CM
+            or distance(at, ghost:K2_GetActorLocation()) > FOCUS_REACH_CM then
+            return
+        end
+        local target = currentTarget(actor)
+        if target == nil then
+            focused[addr] = nil
+            return
+        end
+        local onGuest = target:GetAddress() == ghost:GetAddress()
+        if not onGuest and target:GetAddress() ~= pawn:GetAddress() then
+            return
+        end
+        local now, f = os.clock(), focused[addr]
+        if f == nil or not valid(f.picker) then
+            f = { picker = targetPicker(actor), onGuest = onGuest, since = now, hp = hp }
+            focused[addr] = f
+            if f.picker == nil then
+                return
+            end
+            f.picker.SwitchTargetCooldown = FOCUS_S
+        end
+        local dropped = f.hp and hp and hp < f.hp - 0.5
+        f.hp = hp
+        if f.onGuest ~= onGuest then
+            f.onGuest, f.since = onGuest, now
+        end
+        if now - f.since < FOCUS_S then
+            return
+        end
+        local otherHit
+        if onGuest then
+            otherHit = dropped and game.localMoveRecent(FOCUS_HIT_S)
+        else
+            otherHit = now - (hitByPartner[addr] or -FOCUS_HIT_S) < FOCUS_HIT_S
+        end
+        if otherHit then
+            f.since = now
+            if onGuest then
+                turnTo(actor, f.picker, pawn, ghost)
+            else
+                turnTo(actor, f.picker, ghost, pawn)
+            end
+        end
+    end
+
+    -- A hidden ghost is nobody to fight: the partner's down, gone or elsewhere, and enemies swung at thin air. It comes off
+    -- every list, can't be put back, and each enemy that was after it looks again.
+    function game.ghostInFight(ghost, inFight, enemies)
+        pcall(function() ghost.BP_PBZHatredManagerComponent.CanBeHatredNow = inFight end)
+        if inFight then
+            return
+        end
+        hatesGhost = {}
+        for _, actor in pairs(enemies) do
+            if valid(actor) and not game.isDead(actor) then
+                pcall(function()
+                    actor.BP_PBZHatredManagerComponent:RemoveActorFromHatredList(ghost)
+                    local target = currentTarget(actor)
+                    if target and target:GetAddress() == ghost:GetAddress() then
+                        local picker = targetPicker(actor)
+                        picker.LastSwitchTime = 0
+                        picker:TrySwitchTarget()
+                    end
+                end)
+            end
+        end
     end
 
     ------------------------------------------------------------------ bells (rest = enemies respawn)
@@ -1468,6 +1705,24 @@ return function(api)
     local function deathScreen(pawn)
         local ok, w = pcall(function() return pawn["Death Widget"] end)
         return (ok and valid(w)) and w or nil
+    end
+
+    -- The death screen's tick is what leads to the respawn: stopped, the player waits, and it goes on from there.
+    local heldScreen = nil
+    function game.holdRespawn(pawn, on)
+        if on then
+            local w = valid(pawn) and deathScreen(pawn)
+            if w and heldScreen ~= w then
+                w.NotTick = true
+                heldScreen = w
+            end
+            return heldScreen ~= nil
+        end
+        if valid(heldScreen) then
+            pcall(function() heldScreen.NotTick = false end)
+        end
+        heldScreen = nil
+        return false
     end
 
     local function camSpot(target)
@@ -1678,6 +1933,225 @@ return function(api)
         end
     end
 
+    ------------------------------------------------------------------ enemy groups
+
+    -- A group of enemies gets its places from SGameAIMathUtils:SolveAssignment, which never comes back if a place is the
+    -- engine's "no location" value, and the whole game hangs. A formation gets that when its search for a spot fails and the
+    -- blackboard key it falls back on was never set, which a boss running on with its target down can reach. Such a place
+    -- becomes where that enemy already stands.
+    local SOLVER = "/Script/SGameAI.SGameAIMathUtils:SolveAssignment"
+    local MAP_EDGE_CM = 1e9
+    local solverGuarded, solverTold = false, false
+
+    local function onMap(v)
+        return math.abs(v.X) < MAP_EDGE_CM and math.abs(v.Y) < MAP_EDGE_CM and math.abs(v.Z) < MAP_EDGE_CM
+    end
+
+    local function standingSpots(actors)
+        local spots = {}
+        actors:get():ForEach(function(i, element)
+            local actor = element:get()
+            if valid(actor) then
+                spots[i] = actor:K2_GetActorLocation()
+            end
+        end)
+        return spots
+    end
+
+    function game.guardFormations()
+        if solverGuarded or not valid(StaticFindObject(SOLVER)) then
+            return
+        end
+        solverGuarded = true
+        local ok, err = pcall(function()
+            RegisterHook(SOLVER, function(_, actors, goals)
+                local spots = nil
+                goals:get():ForEach(function(i, element)
+                    local goal = element:get()
+                    if not onMap(goal) then
+                        spots = spots or standingSpots(actors)
+                        local at = spots[i] or spots[1]
+                        goal.X, goal.Y, goal.Z = at and at.X or 0, at and at.Y or 0, at and at.Z or 0
+                    end
+                end)
+                if spots and not solverTold then
+                    solverTold = true
+                    log("An enemy group was given no place to go: it stays where it stands.")
+                end
+            end)
+        end)
+        if not ok then
+            log("Enemy group guard is off: " .. tostring(err))
+        end
+    end
+
+    ------------------------------------------------------------------ what the game gives
+
+    -- Whatever the game gives one player, the other gets too: the same items, at any distance, wherever they came from. So
+    -- it's the backpack's own ways in that are watched. Not what a player buys or makes, nor what this mod adds. The same
+    -- thing given on both PCs within a moment (a boss's reward, a chest both opened) stays one each.
+    local BACKPACK = "/Script/ProjectPBZ.PBZBackPackSubsystem"
+    local SAME_GIFT_S = 15
+    local OWN_ITEM_S = 0.2          -- what comes this soon after buying or making something is that
+    local GEAR = { MedicineInfos = "medicine", Accessories = "accessory" }
+    local givenHere, gearKnown, ownUntil = {}, nil, 0
+    local giftsHooked = false
+
+    local function given(id, count, kind, send)
+        if game.granting or os.clock() < ownUntil or id == "None" or count < 1 then
+            return
+        end
+        givenHere[id .. "x" .. count] = os.clock()
+        send(id, count, kind or "-")
+    end
+
+    function game.hookGifts(send)
+        if giftsHooked or not valid(StaticFindObject(BACKPACK)) then
+            return
+        end
+        giftsHooked = true
+        local ok, err = pcall(function()
+            RegisterHook(BACKPACK .. ":AddPropsByMap", function(_, map, push)
+                if push:get() then
+                    map:get():ForEach(function(id, count)
+                        given(id:get():ToString(), count:get(), nil, send)
+                    end)
+                end
+            end)
+            RegisterHook(BACKPACK .. ":AddPropsToBackPack", function(_, count, id, push)
+                if push:get() then
+                    given(id:get():ToString(), count:get(), nil, send)
+                end
+            end)
+            RegisterHook(BACKPACK .. ":AddWeaponItem", function(_, id, normal, _push, loading)
+                if not loading:get() then
+                    given(id:get():ToString(), 1, normal:get() and "weapon" or "weapon2", send)
+                end
+            end)
+            for _, fn in ipairs({ ":BuyItem", ":CraftItem", ":AutoCheckCrafting" }) do
+                RegisterHook(BACKPACK .. fn, function()
+                    ownUntil = os.clock() + OWN_ITEM_S
+                end)
+            end
+        end)
+        if not ok then
+            log("Shared items are off: " .. tostring(err))
+        end
+    end
+
+    -- Medicines and accessories have no one way in: the lists themselves are looked at, every few seconds.
+    function game.watchGear(pawn, send)
+        local bp = worldSubsystem(pawn, BACKPACK)
+        if not bp then
+            return
+        end
+        local first = gearKnown == nil
+        gearKnown = gearKnown or {}
+        for list, kind in pairs(GEAR) do
+            pcall(function()
+                bp[list]:ForEach(function(key)
+                    local id = key:get():ToString()
+                    if not gearKnown[id] then
+                        gearKnown[id] = true
+                        if not first then
+                            given(id, 1, kind, send)
+                        end
+                    end
+                end)
+            end)
+        end
+    end
+
+    function game.receiveGift(pawn, id, count, kind)
+        local here = givenHere[id .. "x" .. count]
+        if here and os.clock() - here < SAME_GIFT_S then
+            log("The game gave " .. id .. " here too: one each.")
+            return
+        end
+        if gearKnown then
+            gearKnown[id] = true
+        end
+        game.grantLoot(pawn, id, kind, count)
+    end
+
+    -- Each world has its own copy of every chest and rubbish pile, named alike. Its items reach the partner as above, so
+    -- their copy only has to stop paying: a chest counts as opened, a pile goes, as a pickup's copy does. One that isn't
+    -- loaded there goes as soon as it is. (A chest that's locked until a boss dies stays locked for both.)
+    local CHEST_CLASS, PILE_CLASS = "BP_Chest_C", "BP_Rubbish_C"
+    local PILE_SEARCHED = "/Game/PBZContent/Blueprint/Item/Device/BP_Rubbish.BP_Rubbish_C:OnInteract"
+    local CHEST_WATCH_CM = 2000     -- a chest that opens after being this close to the player: they opened it
+    local closedNear, retiring, searched = {}, {}, {}
+    local pileHooked = false
+
+    local function chestOpen(chest)
+        local ok, open, started = pcall(function() return chest.CurSwitchState, chest.bInteracted end)
+        return not ok or open == true or started == true
+    end
+
+    -- A pile says nothing once searched, so its own step is what's watched.
+    function game.hookPiles(report)
+        if pileHooked or not valid(StaticFindObject(PILE_SEARCHED)) then
+            return
+        end
+        pileHooked = true
+        pcall(function()
+            RegisterHook(PILE_SEARCHED, function(self)
+                local ok, name = pcall(function() return self:get():GetFName():ToString() end)
+                if ok and not searched[name] then
+                    searched[name] = true
+                    report(name)
+                end
+            end)
+        end)
+    end
+
+    -- Once a second: a chest that was near this player and closed, and now isn't, they opened.
+    function game.watchChests(pawn, report)
+        local here = pawn:K2_GetActorLocation()
+        local closed = {}
+        for _, c in ipairs(FindAllOf(CHEST_CLASS) or {}) do
+            if valid(c) then
+                local name = c:GetFName():ToString()
+                if chestOpen(c) then
+                    retiring[name] = nil
+                    if closedNear[name] then
+                        report(name)
+                    end
+                elseif retiring[name] then
+                    retiring[name] = nil
+                    pcall(function() c:SwitchWithoutPlaySequence() end)
+                elseif closedNear[name] or distance(c:K2_GetActorLocation(), here) <= CHEST_WATCH_CM then
+                    closed[name] = true         -- (Near once is enough: the player can walk off while it opens.)
+                end
+            end
+        end
+        closedNear = closed
+        if next(retiring) then
+            for _, p in ipairs(FindAllOf(PILE_CLASS) or {}) do
+                if valid(p) and retiring[p:GetFName():ToString()] then
+                    retiring[p:GetFName():ToString()] = nil
+                    pcall(function() p:K2_DestroyActor() end)
+                end
+            end
+        end
+    end
+
+    function game.partnerOpened(name)
+        local isPile = name:find("^BP_Rubbish") ~= nil
+        closedNear[name] = nil
+        for _, c in ipairs(FindAllOf(isPile and PILE_CLASS or CHEST_CLASS) or {}) do
+            if valid(c) and c:GetFName():ToString() == name then
+                if isPile then
+                    pcall(function() c:K2_DestroyActor() end)
+                elseif not chestOpen(c) then
+                    pcall(function() c:SwitchWithoutPlaySequence() end)
+                end
+                return
+            end
+        end
+        retiring[name] = true
+    end
+
     -- How many of this item the backpack holds (0 if it has no entry).
     function game.itemCount(bp, itemId)
         local n = 0
@@ -1730,6 +2204,37 @@ return function(api)
     function game.mapName(contextActor)
         local ok, name = pcall(function() return api.gs():GetCurrentLevelName(contextActor, true):ToString() end)
         return ok and name or "?"
+    end
+
+    -- A level the game's own map table lists: a name from the network is never loaded on its word alone.
+    local MAP_TABLE = "/Game/PBZContent/DataTable/UI/DT_MapData.DT_MapData"
+    local storyLevels = nil
+    function game.isStoryLevel(level)
+        if storyLevels == nil then
+            local t = StaticFindObject(MAP_TABLE)
+            local lib = StaticFindObject("/Script/Engine.Default__DataTableFunctionLibrary")
+            if not (valid(t) and valid(lib)) then
+                return false
+            end
+            local names = lib:GetDataTableColumnAsString(t, FName("LevelName"))
+            storyLevels = {}
+            for i = 1, #names do
+                storyLevels[names[i]:get():ToString()] = true
+            end
+        end
+        return storyLevels[level] == true and level ~= "None" and level ~= "Rhm_Test"
+    end
+
+    -- To a spot on any story map, the way a bell does it: the game saves, then loads there.
+    function game.travel(level, at)
+        local save = FindFirstOf("PBZSaveLoadSubsystem")
+        if not (valid(save) and game.isStoryLevel(level)) then
+            return false
+        end
+        return (pcall(function()
+            save:TeleportTo(FName(level), { Rotation = { X = 0.0, Y = 0.0, Z = 0.0, W = 1.0 },
+                Translation = { X = at.X, Y = at.Y, Z = at.Z + 100 }, Scale3D = { X = 1.0, Y = 1.0, Z = 1.0 } }, FName(""))
+        end))
     end
 
     ------------------------------------------------------------------ test helpers (commands)

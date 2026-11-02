@@ -19,6 +19,7 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 - Shared enemies in both worlds, with shared health, posture and executions
 - Your partner's hits count in the host's world, so you can fight the same enemy together
 - Shared boss fights: the boss health bar and arena fog walls for both players
+- Boss fights wait for everyone: die and you watch your partner until it's over; join during one and you watch, then go to them
 - Shared loot and dust: what either player picks up or earns goes to both
 - Shared resting: rest at a bell and enemies respawn for both
 - Elden Ring–style co-op difficulty: enemies and bosses get more health and posture while you play together
@@ -37,16 +38,16 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 2. Extract the release zip into the game's `PBZ` folder.
 3. In `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`: host sets `Role = Host`, guest sets `HostAddress` to
    the host's Tailscale IP.
-4. Start the game and load your saves, the host first. Co-op starts by itself. (In testing: with `OnlinePanel = On`
-   in the ini, F4 opens a panel to host, join or leave with no restart.)
+4. Start the game and load your saves, the host first. Co-op starts by itself. Or press F5 in the game for the online panel: Host or Guest with no text file.
 
 Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
 
-Both players must use the same version: 1.4.2 has a new connection, and 1.4.1 or older can't connect to it. No Python
+Both players must use the same version: 1.5.0 has a new connection, and 1.4.1 or older can't connect to it. No Python
 needed: the connection runs inside the game. Can't connect, or it feels laggy? See Connection problems in
 [INSTALL.md](INSTALL.md#connection-problems).
 
-For two players on one PC, set `Role = Local` instead and plug in two pads: see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
+For two players on one PC, set `Role = Local` instead and plug in two pads: it's in the same download, see
+[docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
 
 ## Ground rules
 

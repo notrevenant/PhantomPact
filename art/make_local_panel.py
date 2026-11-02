@@ -109,13 +109,13 @@ def selected(name, w, h):
     save(img, name)
 
 
-def card(name, label, sub):
+def card(name, label, sub, face=font):
     w, h = 176, 58
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(26, 27, 31, 240))
     frame(d, w, h)
-    d.text((14 * K, 22 * K), label, font=font(15), fill=BRIGHT, anchor="lm")
-    d.text((14 * K, 42 * K), sub, font=font(11), fill=DIM, anchor="lm")
+    d.text((14 * K, 22 * K), label, font=face(15), fill=BRIGHT, anchor="lm")
+    d.text((14 * K, 42 * K), sub, font=face(11), fill=DIM, anchor="lm")
     save(img, name)
 
 
@@ -139,11 +139,11 @@ def hold():
         save(img, "hold%d" % i)
 
 
-def button(name, text, red=False):
+def button(name, text, red=False, face=font):
     w, h = 170, 46
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(150, 26, 22, 235) if red else (214, 217, 222, 235))
-    spaced(d, (w * K / 2, h * K / 2), text, font(16, True), BRIGHT if red else (10, 11, 13, 255), gap=3)
+    spaced(d, (w * K / 2, h * K / 2), text, face(16, True), BRIGHT if red else (10, 11, 13, 255), gap=3)
     save(img, name)
 
 

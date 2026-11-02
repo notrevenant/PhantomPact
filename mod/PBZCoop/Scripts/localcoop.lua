@@ -946,6 +946,7 @@ return function(api)
             return
         end
         downSince = nil
+        game.guardFormations()
         passDust(p1, p2)
         wakeEnemies(p1, p2)
         keepEnemiesAlive(p1, p2)
@@ -2017,6 +2018,9 @@ return function(api)
             -- is made now and repeated a little later, never above the gourd's maximum.
             local keep = info.CurrentTime + 1
             local function refund()
+                if not valid(info) then
+                    return                  -- a map change: pcall can't catch touching what it took away
+                end
                 pcall(function()
                     local max = info.MaxTime
                     local want = math.min(keep, type(max) == "number" and max or keep)

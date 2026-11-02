@@ -2,7 +2,7 @@
 -- their positions and health were pulled together, so two players never saw the same fight.
 --
 -- A copy the host lists has its AI stopped and follows the host's position here. Whatever the host's enemy starts
--- goes as "A <enemy> <ability class|-> <montage path|-> <position>". An ability replays for real, so its hits land
+-- goes as "A <enemy> <ability class|-> <montage path|-> <position> <who it's aimed at>". An ability replays for real, so its hits land
 -- on the guest and guard, parry and dodge work as usual; a montage alone (hit reactions) deals no damage. Montages
 -- the game builds at run time (turns) have no path to send and are left out.
 
@@ -24,13 +24,19 @@ return function(api)
     local TURN_SHARE = 0.25       -- of the angle, per turn
     local TURN_EVERY_S = 0.05
     local BUSY_S = 0.8            -- after an attack starts, leave the copy's facing to the move
+    local BUSY_MAX_S = 4.0        -- ... for as long as the move lasts, up to this
+    local MOVE_LOOK_S = 0.1
     local RESTART_S = 0.05        -- the same montage at an earlier position = played again
-    local PASSIVE = { "Passive", "Locomotion", "SpaceState", "Stance", "Utilities" }
+    local AI_EVERY_S = 0.1        -- how often each copy's AI is stopped again: the game restarts it by itself
+    -- Abilities that stay on and aren't moves. (Bosses keep a "Subtitles" one up for their lines: taken for the move, the
+    -- real attack was never replayed and only its animation reached the guest, which hurts no one.)
+    local PASSIVE = { "Passive", "Locomotion", "SpaceState", "Stance", "Utilities", "HitMirror", "Subtitles" }
 
     local puppets = { attacks = 0, played = 0, failed = 0, noCopy = 0 }
     local byAddr = {}             -- guest: actor address -> { actor, name, target, busyUntil }
     local hostSeen = {}           -- host: enemy name -> { addr, pos } of the montage last sent
     local hostAnim = {}           -- host: actor address -> its AnimInstance
+    local failedOnce = {}         -- guest: moves already logged as not replayed
 
     local function passive(name)
         for _, word in ipairs(PASSIVE) do
@@ -64,7 +70,8 @@ return function(api)
             local path = api.moves.pathOf(m)
             path = api.moves.allowedPath(path) and path or nil
             if ability or path then
-                coop.sendEvent("A", name, ability or "-", path or "-", string.format("%.2f", pos))
+                coop.sendEvent("A", name, ability or "-", path or "-", string.format("%.2f", pos),
+                    game.enemyAfter(actor, net.ghost))
                 puppets.attacks = puppets.attacks + 1
             end
         end
@@ -76,9 +83,8 @@ return function(api)
         local addr = actor:GetAddress()
         local p = byAddr[addr]
         if p == nil then
-            p = { actor = actor, name = name, busyUntil = 0 }
+            p = { actor = actor, name = name, busyUntil = 0, aiAt = 0 }
             byAddr[addr] = p
-            game.stopAI(actor)
         end
         p.target = target
     end
@@ -93,6 +99,7 @@ return function(api)
         if p then
             byAddr[addr] = nil
             if valid(p.actor) and not game.isDead(p.actor) then
+                pcall(function() p.actor.CharacterMovement.bOrientRotationToMovement = true end)
                 game.startAI(p.actor)
             end
         end
@@ -113,7 +120,7 @@ return function(api)
     end
 
     coop.handlers.A = function(rest)
-        local name, ability, path, pos = (rest or ""):match("^(%S+) (%S+) (%S+) (%S+)$")
+        local name, ability, path, pos, after = (rest or ""):match("^(%S+) (%S+) (%S+) (%S+) (%S+)$")
         pos = tonumber(pos)
         if not (name and pos and pos == pos and pos >= 0 and pos < 600) then
             return
@@ -128,18 +135,45 @@ return function(api)
         if target then
             pcall(function() actor:K2_SetActorRotation({ Pitch = 0.0, Yaw = target.Yaw, Roll = 0.0 }, false) end)
         end
-        p.busyUntil = os.clock() + BUSY_S
-        if ability ~= "-" and game.playAbility(actor, ability) then
-            puppets.played = puppets.played + 1
-            return
+        if after ~= "-" then
+            local _, pawn = api.getPlayer1()
+            local aim = after == "guest" and pawn or net.ghost
+            if valid(aim) then
+                game.aimCopy(actor, actor:GetAddress(), aim)
+            end
         end
         local m = path ~= "-" and api.moves.allowedPath(path) and api.moves.montage(path)
+        local left = BUSY_S
+        if m then
+            pcall(function() left = math.min(BUSY_MAX_S, math.max(BUSY_S, m:GetPlayLength() - pos)) end)
+        end
+        p.busySince = os.clock()
+        p.busyUntil = p.busySince + left
         local ai = m and api.moves.animOf(actor)
+        if ability ~= "-" and game.playAbility(actor, ability) then
+            puppets.played = puppets.played + 1
+            -- A move of several steps starts from its first, and the host's may be further on: what's seen is the host's.
+            local shown = ai and ai:GetCurrentActiveMontage()
+            if not ai or (valid(shown) and shown:GetAddress() == m:GetAddress()) then
+                return
+            end
+        end
         if ai and pcall(function() ai:Montage_Play(m, 1.0, 0, pos + (net.rttMs or 0) / 2000, true) end) then
             puppets.played = puppets.played + 1
         else
             puppets.failed = puppets.failed + 1
+            if not failedOnce[ability .. path] then
+                failedOnce[ability .. path] = true
+                log("Enemy move not replayed: " .. ability .. " " .. path)
+            end
         end
+    end
+
+    local function moving(p)
+        if not valid(p.anim) then
+            p.anim = api.moves.animOf(p.actor)
+        end
+        return p.anim ~= nil and valid(p.anim:GetCurrentActiveMontage())
     end
 
     -- The host's enemy is carried forward along its own speed from the last update, and the copy moves at that speed
@@ -159,7 +193,16 @@ return function(api)
                 { Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false, {}, true)
             return
         end
-        local busy = os.clock() < p.busyUntil
+        local clock = os.clock()
+        local busy = clock < p.busyUntil
+        if busy and clock >= (p.moveLookAt or 0) then
+            p.moveLookAt = clock + MOVE_LOOK_S
+            -- Over sooner than it might have been: left waiting, the copy stood facing the old way and then snapped round.
+            if clock > p.busySince + BUSY_S and not moving(p) then
+                p.busyUntil = 0
+                busy = false
+            end
+        end
         if busy and dist < LOCKED_CM then
             if dist > BUSY_CM then
                 actor:K2_SetActorLocation({ X = cur.X + dx * BUSY_PULL, Y = cur.Y + dy * BUSY_PULL, Z = cur.Z }, false, {}, true)
@@ -178,6 +221,10 @@ return function(api)
         local speed = math.sqrt(vx * vx + vy * vy)
         if speed > STILL then
             local cmc = actor.CharacterMovement
+            -- Only one thing may turn a copy: the game would turn it to where it's walking, this file to where the host's
+            -- enemy looks, and the two pulling at each other every frame made it twitch. (The game's moves keep putting
+            -- this back.)
+            cmc.bOrientRotationToMovement = false
             cmc.MaxWalkSpeed = math.min(MAX_SPEED, speed)
             actor:AddMovementInput({ X = vx / speed, Y = vy / speed, Z = 0.0 }, 1.0, false)
             if dist > NUDGE_CM then
@@ -192,8 +239,14 @@ return function(api)
         for addr, p in pairs(byAddr) do
             if not valid(p.actor) then
                 byAddr[addr] = nil
-            elseif p.target then
-                steer(p, now, addr)
+            else
+                if now >= p.aiAt then
+                    p.aiAt = now + AI_EVERY_S
+                    p.brain = game.stopAI(p.actor, p.brain)
+                end
+                if p.target then
+                    steer(p, now, addr)
+                end
             end
         end
     end

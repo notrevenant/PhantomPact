@@ -1,0 +1,114 @@
+-- The online mode's words on screen, in English or Chinese: picked on the online panel (F5), kept in PhantomPact.ini.
+-- Everything is written in English and logged that way. say() turns a line into Chinese as it goes on screen, and a
+-- line with no row here stays English. The panel's own pictures come in both (art/make_online_panel.py).
+
+return function()
+    local lang = { code = "en" }
+
+    -- Whole lines.
+    local LINES = {
+        -- the panel
+        ["Not connected."] = "未连接。",
+        ["Starting..."] = "正在启动……",
+        ["Waiting for a partner."] = "正在等待队友。",
+        ["Looking for a Steam friend who's hosting..."] = "正在寻找开房的 Steam 好友……",
+        ["Copy the host's address first, then press Paste."] = "请先复制房主的地址,再按“粘贴地址”。",
+        ["Copy the password first, then press Paste password."] = "请先复制密码,再按“粘贴密码”。",
+        ["Password set. Your partner needs the same one."] = "密码已设置。队友需要使用相同的密码。",
+        ["Password removed."] = "密码已清除。",
+        ["PhantomPact.ini: HostAddress isn't set. Put the host's Tailscale IP there, or use Steam."] =
+            "还没有房主地址。请复制房主的地址后按“粘贴地址”,或者使用 Steam。",
+        ["PhantomPact.ini: HostAddress has a character that can't be used (\" % & | < > ^). Leave it empty to join any friend who's hosting."] =
+            "房主名称里有不能使用的字符(\" % & | < > ^)。留空即可加入任何正在开房的好友。",
+        ["this game update isn't tested with this Phantom Pact version; some co-op features may fail."] =
+            "这个游戏版本尚未用当前的 Phantom Pact 测试过,部分联机功能可能失效。",
+        ["Couldn't start the relay: dlls\\main.dll can't be reached. Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide."] =
+            "无法启动联机模块:找不到 dlls\\main.dll。请重新安装 Phantom Pact,检查杀毒软件是否删除了它,并使用安装说明里的 UE4SS 版本。",
+        -- the partner
+        ["your partner found something: you have it too."] = "队友找到了东西:你也获得了一份。",
+        ["your partner is down."] = "队友倒下了。",
+        ["your partner is back."] = "队友回来了。",
+        ["your partner is watching a cutscene."] = "队友正在观看过场动画。",
+        ["partner disconnected."] = "队友已断开连接。",
+        ["TP > PARTNER is off. Turn it on in MORE (F5)."] = "传送到队友已关闭。可在 F5 的“更多”里开启。",
+        ["couldn't reach your partner in time. TP > PARTNER in MORE (F5) can take you there."] =
+            "没能及时传送到队友身边。可在 F5 的“更多”里开启传送到队友。",
+        ["no partner to go to yet."] = "还没有可以传送的队友。",
+        ["not now."] = "现在不能传送。",
+        ["your partner can't be joined right now."] = "现在无法传送到队友身边。",
+        ["your partner's position looks wrong."] = "队友的位置不正常。",
+        ["your partner's map isn't known yet."] = "还不知道队友在哪张地图。",
+        ["the game wouldn't go there."] = "游戏无法前往那里。",
+        -- revive
+        ["you're down: you'll be back when the fight is over."] = "你倒下了:战斗结束后才会复活。",
+        ["your partner is in a boss fight: you'll join them when it's over."] = "队友正在首领战中:战斗结束后你会前往队友身边。",
+        ["You're back on your feet."] = "你重新站起来了。",
+        ["You're down: your partner can strike you to bring you back."] = "你倒下了:队友攻击你就能把你救起。",
+        ["Your partner is down: strike them to bring them back."] = "队友倒下了:攻击队友就能把对方救起。",
+        ["Your partner is back on their feet."] = "队友重新站起来了。",
+        -- the connection
+        ["nobody has joined yet. Your partner needs Role = Guest and your address: two Hosts never find each other."] =
+            "还没有人加入。队友要按“加入”并使用你的地址:两边都开房是找不到对方的。",
+        ["packets refused: both PCs need the same Secret in PhantomPact.ini (or both none), and their clocks within two minutes of each other."] =
+            "连接被拒绝:双方的密码必须相同(或都不设),两台电脑的时间相差也不能超过两分钟。",
+        ["Steam is relaying this connection, which adds delay. A direct one needs SteamDirect = On on both PCs and routers that allow it."] =
+            "这次连接经过 Steam 中继,延迟会更高。要直连,双方都要开启 Steam 直连,路由器也要允许。",
+    }
+
+    -- Parts of lines, in this order. What's around them stays as it is.
+    local PARTS = {
+        { "^Connected to (%S+)%.", "已连接到 %1。" },
+        { " Ping (%d+) ms%.", " 延迟 %1 毫秒。" },
+        { " Route: direct%.", " 线路:直连。" },
+        { " Route: relay%.", " 线路:中继。" },
+        { "^Couldn't start: ", "无法启动:" },
+        { "^Couldn't start the relay: net_start%.txt can't be written in (.+)$", "无法启动联机模块:无法写入 %1 里的 net_start.txt" },
+        { "^Looking for (.+)%.%.%.$", "正在寻找 %1……" },
+        { "^Host address set to (.+)%.$", "房主地址已设置为 %1。" },
+        { "^your partner is on another map%.", "队友在另一张地图上。" },
+        { "^your partner is (%d+) m away%.", "队友在 %1 米外。" },
+        { " F3 takes you there%.$", " 按 F3 传送过去。" },
+        { "^partner connected %(ping (%d+) ms%)", "队友已连接(延迟 %1 毫秒)" },
+        { "^partner connected", "队友已连接" },
+        { ", signed%.$", ",已签名。" },
+        { "^(队友已连接.-)%.$", "%1。" },
+        { "^co%-op couldn't start: ", "无法开始联机:" },
+        { "^Steam couldn't connect: (.+)%. See Connection problems in the install guide%.$",
+            "Steam 无法连接:%1。请查看安装说明里的“连接问题”。" },
+        { "^settings differ from your partner's: ", "你和队友的设置不同:" },
+        { "^your partner's Phantom Pact %((.+)%) can't connect to (.+): both PCs need the same version%.$",
+            "队友的 Phantom Pact(%1)无法连接到 %2:双方必须使用相同的版本。" },
+        { "^your partner is on Phantom Pact (.+) and you're on (.+): use the same version, or enemies won't stay in step%.$",
+            "队友使用 Phantom Pact %1,你使用 %2:请使用相同的版本,否则敌人会不同步。" },
+        { "^high ping %((%d+) ms%)%.", "延迟过高(%1 毫秒)。" },
+        { " On Tailscale, run \"tailscale ping\": via DERP means relayed%.$",
+            " 使用 Tailscale 时可运行 “tailscale ping”:显示 via DERP 表示经过了中继。" },
+        { "^no answer from the host %((.+)%)%. Check HostAddress and Port, that they're in the game on Role = Host, and the same Secret and Phantom Pact version on both PCs%.$",
+            "房主(%1)没有回应。请检查地址和端口、房主是否已在游戏里开房,以及双方的密码和 Phantom Pact 版本是否相同。" },
+        { "^no friend hosting found%..*$",
+            "没有找到正在开房的好友。你们必须是 Steam 好友,对方要开房并使用 Steam,而且不能隐身;双方的密码和 Phantom Pact 版本也要相同。" },
+    }
+
+    function lang.set(word)
+        lang.code = (word or ""):lower() == "chinese" and "zh" or "en"
+    end
+
+    function lang.word()
+        return lang.code == "zh" and "Chinese" or "English"
+    end
+
+    function lang.say(text)
+        if lang.code ~= "zh" then
+            return text
+        end
+        if LINES[text] then
+            return LINES[text]
+        end
+        for _, row in ipairs(PARTS) do
+            text = text:gsub(row[1], row[2])
+        end
+        return text
+    end
+
+    return lang
+end

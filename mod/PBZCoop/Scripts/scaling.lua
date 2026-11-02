@@ -3,7 +3,8 @@
 --
 -- Both players' games scale the same enemies by the same factor, so the host's numbers (which the guest's copies
 -- follow down) and the guest's own copies stay in step. Each enemy is scaled once, keeping its current share of
--- health; enemies that respawn (bell rest) are new actors and get scaled again.
+-- health; enemies that respawn (bell rest) are new actors and get scaled again. The guest's copies then take the host's
+-- maximum anyway (coop.lua).
 
 return function(api)
     local log, valid, game = api.log, api.valid, api.game
@@ -18,7 +19,8 @@ return function(api)
     local LOOKS_PER_TICK = 16       -- enemies looked at per tick, and at most one scaled: that takes about 25 calls through
                                     -- UE4SS, and all those near a new player scaled in one frame was a 23 ms frame
 
-    local scaled = {}               -- enemy address -> true once scaled
+    local scaled = {}               -- enemy address -> its name once scaled (an address comes back for a new actor, after a
+                                    -- map change or a respawn, and that one wasn't scaled yet)
 
     local function scaleAttr(set, name, maxName, factor)
         pcall(function()
@@ -62,8 +64,9 @@ return function(api)
                 return
             end
             at = at + 1
-            if not scaled[addr] and valid(e) then
-                scaled[addr] = true       -- (or it's dead, and nothing brings it back as the same actor)
+            local name = valid(e) and e:GetFName():ToString()
+            if name and scaled[addr] ~= name then
+                scaled[addr] = name       -- (or it's dead, and nothing brings it back as the same actor)
                 if not game.isDead(e) then
                     local set = e.AttributeSetBase
                     scaleAttr(set, "Health", "Health_Max", scaling.health)

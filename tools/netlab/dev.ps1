@@ -116,8 +116,11 @@ function Get-DevLog($Game, [datetime]$Since = (Get-Date).AddMinutes(-2), [string
 }
 
 # RETURN on the title screen and CONTINUE, until the mod sees a player. Never New Game: RETURN takes the first entry,
-# which is CONTINUE whenever a save exists.
-function Wait-DevGameplay($Game, [int]$TimeoutSec = 240) {
+# which is CONTINUE whenever a save exists. But after a crash the game first asks whether you want a new game, OK on the
+# left and Cancel on the right, and RETURN takes OK: that started a New Game on the host once. -AfterCrash goes RIGHT to
+# Cancel before each RETURN, so the first one cancels and the next takes CONTINUE. (Twice, apart: the first RIGHT can be
+# the key that ends the "press any key" screen, and the question only comes up after it.)
+function Wait-DevGameplay($Game, [int]$TimeoutSec = 240, [switch]$AfterCrash) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $window = [IntPtr]::Zero
     while ((Get-Date) -lt $deadline) {
@@ -129,10 +132,24 @@ function Wait-DevGameplay($Game, [int]$TimeoutSec = 240) {
         # Two copies write one log: a copy over 1 tags its lines with its number.
         $tag = if ($Game.Instance -gt 1) { "PBZCoop#$($Game.Instance)\]" } else { 'PBZCoop\]' }
         if (Get-DevLog $Game $t "$tag eval ok: pawn=true") { return $true }
-        if ($window -ne [IntPtr]::Zero) { [NetLab.Win]::Key($window, 0x0D) }
+        if ($window -ne [IntPtr]::Zero) {
+            if ($AfterCrash) {
+                [NetLab.Win]::Key($window, 0x27)
+                Start-Sleep -Seconds 3
+                [NetLab.Win]::Key($window, 0x27)
+                Start-Sleep -Seconds 1
+            }
+            [NetLab.Win]::Key($window, 0x0D)
+        }
         Start-Sleep -Seconds 5
     }
     return $false
+}
+
+# A crash dump written since then: the copies running at that time may have crashed, so -AfterCrash for Wait-DevGameplay.
+function Test-DevCrashed([datetime]$Since) {
+    @(Get-ChildItem (Join-Path (Split-Path (Split-Path $script:ModDir)) 'crash_*.dmp') -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -gt $Since }).Count -gt 0
 }
 
 # Only ever a copy that runs from the dev install.

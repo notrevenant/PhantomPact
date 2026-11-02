@@ -22,6 +22,7 @@ $mod = Join-Path $stage 'platform\steam\ue4ss\Mods\PBZCoop'
 New-Item -ItemType Directory -Force (Join-Path $mod 'Scripts') | Out-Null
 
 Copy-Item (Join-Path $root 'INSTALL.md') (Join-Path $stage 'Phantom Pact - INSTALL.md')
+Copy-Item (Join-Path $root 'docs\LOCAL_COOP.md') (Join-Path $stage 'Phantom Pact - LOCAL CO-OP.md')
 foreach ($f in 'enabled.txt', 'PhantomPact.ini') { Copy-Item (Join-Path $root "mod\PBZCoop\$f") $mod }
 Copy-Item (Join-Path $root 'mod\PBZCoop\Scripts\*.lua') (Join-Path $mod 'Scripts')
 # The PvP victory calligraphy (生还, painted in Lumina), loaded by pbz.lua at run time.
@@ -42,7 +43,7 @@ $devFiles = Get-ChildItem $stage -Recurse -File | Where-Object {
 }
 if ($devFiles) { throw "Not for players: $(($devFiles | ForEach-Object Name) -join ', ')" }
 $ini = Get-Content (Join-Path $mod 'PhantomPact.ini') -Raw
-foreach ($setting in '(?m)^Role = Guest\s*$', '(?m)^HostAddress = PUT-THE-HOSTS-TAILSCALE-IP-HERE\s*$', '(?m)^Secret =[ \t]*\r?$') {
+foreach ($setting in '(?m)^Role = Off\s*$', '(?m)^HostAddress = PUT-THE-HOSTS-TAILSCALE-IP-HERE\s*$', '(?m)^Secret =[ \t]*\r?$') {
     if ($ini -notmatch $setting) { throw "PhantomPact.ini isn't the default one (expected $setting)." }
 }
 if ($ini -match '(?mi)^\s*ThisPcOnly') { throw "PhantomPact.ini has ThisPcOnly, which is for tests: players couldn't connect." }

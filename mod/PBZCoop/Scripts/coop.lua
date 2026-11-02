@@ -16,7 +16,9 @@
 --                            PCs (a client's own death respawn isn't sent: only its world refreshes)
 --       Y <world>            host -> client: stands for the host's world as loaded: another one, and enemies respawn here
 --       C <amount>           the sender gained this much dust (currency): shared rewards
---       I <pickup>           this pickup/chest was taken
+--       I <pickup>           this pickup was taken
+--       O <name>             this chest or rubbish pile was opened: the copy here stops paying
+--       T <item> <n> <kind>  the game gave the sender this: the same here
 --       W <weapon> <0|1>     what the sender holds, and whether it's drawn (moves.lua)
 --       S                    from the relay: the partner has just (re)started sync
 --     only worth showing now (dropped if late):
@@ -53,9 +55,11 @@ return function(api)
     local GHOST_HOVER_S = 6.0     -- then it stays gliding this long (the partner's ground isn't loaded on this PC)
     local BOSS_JOIN_CM = 5000     -- further than this from the other player's boss, you're brought to it: arenas are
     local BOSS_JOIN_SIDE_CM = 300 -- apart from the map (Xigu's is 20 km up, no way to walk there). This far from its spot
+    local JOIN_NEAR_CM = 1500     -- going to the partner from closer than this does nothing
     local ARRIVE_HOLD_S = 3.0     -- kept in the air this long on arrival, while the ground there loads
     local ARRIVE_WATCH_S = 25.0   -- for this long, a player dropping through ground that isn't there yet is put back
     local ARRIVE_FALL_CM = 300    -- this far below the arrival point counts as dropping through
+    local ARRIVE_SETTLE_S = 0.6   -- after the hold, this long to find the ground or start falling
     local RESPAWN_CALM_S = 30.0   -- this long after a respawn, the partner's boss fight doesn't pull this player in
     local BOSS_RETURN_S = 8.0     -- after the boss dies, this long before following a partner who left the arena
     local REJOIN_S = 2.0          -- after respawning, this long before going back to the fight the host is still in
@@ -64,11 +68,16 @@ return function(api)
     local GAP_LOG_S = 0.5         -- a partner silent this long is logged when they return (choppy-connection reports)
     local BYTES_LOG_S = 60        -- seconds between lines on how much we send
     local ENEMY_RADIUS_CM = 6000  -- host shares enemies within this distance of its player
+    local PARTNER_REACH_CM = 12000 -- and around a client this close to it. (Measured: enemies fight a client up to 120 m off, not at 200.)
     local ENEMY_ROUND_S = 0.1     -- each enemy in reach gets a turn this often, a few per frame so none costs a hitch
     local ENEMY_LIST_S = 0.5      -- and who's in reach is worked out this often
     local ENEMY_STALE_S = 1.0     -- a host enemy not updated this long is no longer shared
     local ENEMY_MATCH_CM = 2000   -- client: a same-class enemy this close stands in for a host enemy with another id
     local PICKUP_S = 1.0          -- between pickup scans
+    local MAX_CHEST_NAME = 96     -- what the partner may say a chest is called
+    local MAX_ITEM_NAME = 64      -- and an item
+    local MAX_GIFT = 999
+    local GEAR_S = 5.0            -- between looks at the medicine and accessory lists
     local CURRENCY_S = 0.5        -- between dust checks
     local AGGRO_S = 1.0           -- between ghost aggro refreshes
     local MOVE_NONE = 0           -- EMovementMode::MOVE_None
@@ -274,6 +283,9 @@ return function(api)
             if api.moves then
                 pcall(api.moves.hideGear, net.ghost, hide)    -- its weapon is an actor of its own
             end
+            if isHost() then
+                game.ghostInFight(net.ghost, not hide, (game.enemiesSoFar()))
+            end
             if hide then
                 log("Ghost hidden: the other player is " .. (gone and "gone" or dead and "down"
                     or t.Cine and "in a cutscene" or ("on map " .. tostring(t.Map))) .. ".")
@@ -323,7 +335,7 @@ return function(api)
     -- it stays on the path at any speed instead of trailing behind. Its own movement keeps it on the ground and plays the
     -- game's locomotion animations.
     local function steerGhost()
-        if not valid(net.ghost) or net.target == nil then
+        if not valid(net.ghost) or net.target == nil or (net.ghostWalks and not valid(net.ghostCmc)) then
             return
         end
         local cur = net.ghost:K2_GetActorLocation()
@@ -381,12 +393,18 @@ return function(api)
     ------------------------------------------------------------------ enemies
 
     -- Enemies within ENEMY_RADIUS_CM of the local player, or (second origin) of the other player: the host shares
-    -- the enemies around the client too, so a client fighting far from the host still fights the host's enemy
-    -- (otherwise it would be the client's own, and could die there while alive for the host).
+    -- the enemies around a client near it too, so that client still fights the host's enemy (otherwise it would be the
+    -- client's own, and could die there while alive for the host). Further off they sleep on the host, since the game wakes
+    -- enemies around its own player only, and a copy waiting for the host's orders would stand and watch: those stay the
+    -- client's own, with their own AI, and a kill reaches the host as GK.
     -- Worked out a few each frame: reading every loaded enemy at once stood out as a hitch twice a second.
     local reach = { list = {}, addrs = {}, at = 1, near = {} }     -- near: address -> { actor, loc, addr }
     -- The work on enemies is spread the same way: every enemy in reach gets a turn each ENEMY_ROUND_S.
     local round = { queue = {}, at = 1, startedAt = -1e9, number = 0 }
+
+    local function gap3d(a, b)
+        return math.sqrt((a.X - b.X) ^ 2 + (a.Y - b.Y) ^ 2 + (a.Z - b.Z) ^ 2)
+    end
 
     local function inReach(x, y, z, o)
         local dx, dy, dz = x - o.X, y - o.Y, z - o.Z
@@ -442,6 +460,18 @@ return function(api)
     local function ghostsHit()
         return game.ghostMoveRecent and game.ghostMoveRecent(ATTRIBUTION_S)
             and not game.localMoveRecent(ATTRIBUTION_S)
+    end
+
+    -- A copy's health moves for other reasons too: its own moves, which replay for real, and being scaled or unloaded. Sent
+    -- as hits, those took thousands off the host's enemies, even killed them. So it's this player's hit only if they've
+    -- moved lately and stand near enough to have landed one.
+    local OWN_HIT_S = 3.0
+    local OWN_HIT_CM = 6000
+
+    local function ownHit(actor)
+        local _, pawn = getPlayer1()
+        return game.localMoveRecent(OWN_HIT_S) and valid(pawn)
+            and distance(actor:K2_GetActorLocation(), pawn:K2_GetActorLocation()) <= OWN_HIT_CM
     end
 
     local function undoHit(actor, prevHp, prevPosture)
@@ -586,8 +616,14 @@ return function(api)
                     x, y, z, yaw, vx == vx and vx or 0, vy == vy and vy or 0, hp, maxhp, boss,
                     posture ~= nil and string.format("%.1f", posture) or "-"))
             end
-            if aggro and valid(net.ghost) and game.hateGhost then
+            if aggro and valid(net.ghost) and game.hateGhost and not net.ghostHidden then
                 game.hateGhost(actor, net.ghost, addr, x, y, z)
+                if not net.pvp then
+                    local _, pawn = getPlayer1()
+                    if valid(pawn) and not game.isDead(pawn) then
+                        game.steerFocus(actor, addr, x, y, z, hp, pawn, net.ghost)
+                    end
+                end
             end
         end
     end
@@ -722,7 +758,10 @@ return function(api)
                 log("Host's boss fight with " .. name .. " now matched here.")
                 mirrorBossFight(name, actor)
             end
-            local hp = game.getHealth and game.getHealth(actor)
+            local hp, maxhp = nil, nil
+            if game.getHealth then
+                hp, maxhp = game.getHealth(actor)
+            end
             local posture = game.getPosture and game.getPosture(actor)
             local prev = seen[name]
             if prev and prev.addr ~= addr then
@@ -732,10 +771,11 @@ return function(api)
                 local dHp = prev.hp - hp
                 local dPosture = (prev.posture and posture) and (prev.posture - posture) or 0
                 if dHp > 0.5 or dPosture > 0.5 then
-                    -- (Outside PvP the ghost's Attack is 0, so lost health is always ours, however long after its start
-                    -- a charged swing lands.)
                     if ghostsHit() and (net.pvp or dHp <= 0.5) then
                         -- The host's swing, replayed here: the host's own world already took it.
+                        undoHit(actor, prev.hp, prev.posture)
+                        hp, posture = prev.hp, prev.posture
+                    elseif dHp > 0.5 and not net.pvp and not ownHit(actor) then
                         undoHit(actor, prev.hp, prev.posture)
                         hp, posture = prev.hp, prev.posture
                     else
@@ -757,6 +797,9 @@ return function(api)
                 held[addr] = actor
                 if api.puppets then
                     api.puppets.follow(name, actor, r)
+                end
+                if game.setMaxHealth and r.MaxHp and maxhp and math.abs(r.MaxHp - maxhp) > 1 then
+                    game.setMaxHealth(actor, r.MaxHp)
                 end
                 if game.setHealth and r.Hp ~= nil and hp ~= nil and r.Hp < hp - 0.5 then
                     game.setHealth(actor, r.Hp)
@@ -848,7 +891,8 @@ return function(api)
         end
         if isHost() then
             local t = net.target
-            updateReach(origin, (t ~= nil and not net.ghostHidden) and t or nil, dt)
+            local near = t ~= nil and not net.ghostHidden and gap3d(origin, t) <= PARTNER_REACH_CM
+            updateReach(origin, near and t or nil, dt)
             if round.at > #round.queue and now - round.startedAt >= ENEMY_ROUND_S then
                 startHostRound(now)
             end
@@ -985,20 +1029,18 @@ return function(api)
     end
 
     -- Host: the client's hit killed this enemy. The game's own loot roll didn't run (see game.rollLoot), so it's
-    -- rolled here, once. Dust goes to the host like any kill's and reaches the client as shared dust ("C");
-    -- items go to the client, who made the kill (as single-player gives them to the killer). A boss's go to both.
-    local function payKillLoot(name, actor, boss)
+    -- rolled here, once. Dust goes to the host like any kill's and reaches the client as shared dust ("C"); items go to
+    -- both.
+    local function payKillLoot(name, actor)
         local dust, items, level = game.rollLoot(actor)
         local _, pawn = getPlayer1()
         local paid = {}
         if dust > 0 and valid(pawn) and pcall(function() pawn:ChangeDustNumInternal(dust) end) then
             paid[#paid + 1] = dust .. " dust"
         end
-        if boss then
-            for _, item in ipairs(items) do
-                for _ = 1, item.count do
-                    game.grantLoot(pawn, item.id, item.kind)
-                end
+        for _, item in ipairs(items) do
+            for _ = 1, item.count do
+                game.grantLoot(pawn, item.id, item.kind)
             end
         end
         sendItems(name, items, paid)
@@ -1022,13 +1064,15 @@ return function(api)
         end
         if isHost() and name then
             local actor = enemyByName[name]
-            if valid(actor) and game.applyDamage then
+            if valid(actor) and game.applyDamage and net.target
+                and gap3d(actor:K2_GetActorLocation(), net.target) <= OWN_HIT_CM then
                 local wasAlive = not (game.isDead and game.isDead(actor))
                 local boss = net.partnerBosses[name] or (game.isBoss and game.isBoss(actor))
                 game.applyDamage(actor, amount, posture)
+                game.partnerHit(actor:GetAddress())
                 if wasAlive and game.isDead and game.isDead(actor) then
                     if game.rollLoot then
-                        payKillLoot(name, actor, boss)
+                        payKillLoot(name, actor)
                     end
                     -- At once, not at the enemy's next turn: the partner is looking at a copy held at 1 health.
                     net.deadSent[name] = true
@@ -1062,9 +1106,44 @@ return function(api)
         end
     end
 
+    handlers.O = function(name)
+        if name and #name <= MAX_CHEST_NAME and game.partnerOpened then
+            game.partnerOpened(name)
+        end
+    end
+
+    -- What the game gave the partner. Played with nobody in the world (a map loading) it waits.
+    local giftsWaiting = {}
+    handlers.T = function(rest)
+        local id, count, kind = rest:match("^(%S+) (%d+) (%S+)$")
+        count = num(count)
+        if id and #id <= MAX_ITEM_NAME and count and count >= 1 and count <= MAX_GIFT then
+            giftsWaiting[#giftsWaiting + 1] = { id = id, count = count, kind = kind ~= "-" and kind or nil }
+        end
+    end
+
+    local function takeGifts(pawn)
+        for _, gift in ipairs(giftsWaiting) do
+            game.receiveGift(pawn, gift.id, gift.count, gift.kind)
+            if gift.kind == "accessory" or gift.kind == "medicine" then
+                api.status.notify("gift", "your partner found something: you have it too.")    -- (these come with no popup)
+            end
+        end
+        giftsWaiting = {}
+    end
+
+    local function reportChest(name)
+        log("Opened " .. name .. ": telling the other player.")
+        sendEvent("O", name)
+    end
+
+    local function sendGift(id, count, kind)
+        sendEvent("T", id, count, kind)
+    end
+
     local function reportPickup(name, itemId)
         log("Picked up " .. name .. " (" .. tostring(itemId) .. "), telling the other player.")
-        sendEvent("I", name, itemId or "?")
+        sendEvent("I", name, "?")       -- (only that it's gone: the item itself goes by T, like everything the game gives)
     end
 
     ------------------------------------------------------------------ bells and currency
@@ -1090,6 +1169,8 @@ return function(api)
         if game.resetBosses then
             game.resetBosses()
         end
+        game.forgetFocus()
+        game.forgetMoves()
     end
 
     -- A death respawn refreshes the dying player's own world (the game does that, as in single-player).
@@ -1175,13 +1256,10 @@ return function(api)
 
     ------------------------------------------------------------------ bosses
 
-    local function gap3d(a, b)
-        return math.sqrt((a.X - b.X) ^ 2 + (a.Y - b.Y) ^ 2 + (a.Z - b.Z) ^ 2)
-    end
-
-    local function arriveAt(pawn, at)
+    -- side: how far off the spot to land. (Beside a boss, not on it. On a partner it's fine: the ghost ignores pawns.)
+    local function arriveAt(pawn, at, side)
         pawn.CharacterMovement:SetMovementMode(MOVE_FLYING, 0)
-        local spot = { X = at.X + BOSS_JOIN_SIDE_CM, Y = at.Y, Z = at.Z + 100 }
+        local spot = { X = at.X + (side or BOSS_JOIN_SIDE_CM), Y = at.Y, Z = at.Z + 100 }
         pawn:K2_SetActorLocation(spot, false, {}, true)
         net.arriveUntil = os.clock() + ARRIVE_HOLD_S
         net.arrival = net.arrival or { spot = spot, untilClock = os.clock() + ARRIVE_WATCH_S }
@@ -1210,6 +1288,42 @@ return function(api)
         end
     end
 
+    -- This player goes to the partner, on this map or another: a friend on a new save could never walk to a host deep in
+    -- the story, and a door only the other world has opened would keep them apart. Says why not, or nil once on the way.
+    local function joinPartner()
+        local controller, pawn = getPlayer1()
+        local t = net.target
+        if not (net.enabled and t and valid(pawn)) or net.partnerGone or net.ghostHidden == nil then
+            return "no partner to go to yet."
+        end
+        if game.isDead(pawn) or (game.inCutscene and game.inCutscene()) or net.pvp or game.bossFightActive()
+            or api.gs():IsGamePaused(controller) or api.localcoop.bellMenuUp() or api.localcoop.screenUp() then
+            return "not now."
+        end
+        if t.Hp == nil or t.Hp <= 0 or t.Cine then
+            return "your partner can't be joined right now."
+        end
+        if not (math.abs(t.X) < 1e7 and math.abs(t.Y) < 1e7 and math.abs(t.Z) < 1e7) then
+            return "your partner's position looks wrong."
+        end
+        if t.Map == net.localMap then
+            if gap3d(pawn:K2_GetActorLocation(), t) > JOIN_NEAR_CM then
+                net.arrival = nil       -- (this trip's spot, not the last one's)
+                arriveAt(pawn, t, 0)
+            end
+            return nil
+        end
+        local level = (link.status() or ""):match("partner_map=(%S+)")
+        if not level or level == "-" or level == "?" then
+            return "your partner's map isn't known yet."
+        end
+        if not (game.travel and game.travel(level, t)) then
+            return "the game wouldn't go there."
+        end
+        log("Going to the other player, on " .. level .. ".")
+        return nil
+    end
+
     local function watchArrival()
         if not (net.arriveUntil or net.arrival or net.bossOverAt) then
             return
@@ -1217,6 +1331,7 @@ return function(api)
         local _, pawn = getPlayer1()
         if net.arriveUntil and os.clock() >= net.arriveUntil then
             net.arriveUntil = nil
+            net.landedCheckAt = os.clock() + ARRIVE_SETTLE_S
             if valid(pawn) then
                 pawn.CharacterMovement:SetMovementMode(MOVE_WALKING, 0)
             end
@@ -1232,6 +1347,9 @@ return function(api)
                 pawn.CharacterMovement:SetMovementMode(MOVE_FLYING, 0)
                 pawn:K2_SetActorLocation(arrival.spot, false, {}, true)
                 net.arriveUntil = os.clock() + ARRIVE_HOLD_S
+            elseif not net.arriveUntil and os.clock() >= (net.landedCheckAt or 0)
+                and pawn.CharacterMovement.MovementMode == MOVE_WALKING then
+                net.arrival = nil       -- on the ground: from here a drop is a slope or a ledge, and the player's own
             end
         end
         -- Respawned at a bell with the host still in the fight: back to it.
@@ -1251,6 +1369,22 @@ return function(api)
         end
     end
     extraTicksEarly.arrival = watchArrival
+
+    -- A partner heard from a moment ago.
+    local LINKED_S = 5.0
+    local function linked()
+        return net.enabled and not net.partnerGone and net.lastRemoteAt ~= nil and os.clock() - net.lastRemoteAt < LINKED_S
+    end
+
+    -- Never paused with a partner linked: their game goes on, so a menu here is a menu in a live world, as in any co-op.
+    extraTicksEarly.noPause = function()
+        if linked() then
+            local controller, pawn = getPlayer1()
+            if valid(pawn) and api.gs():IsGamePaused(controller) then
+                api.gs():SetGamePaused(controller, false)
+            end
+        end
+    end
 
     handlers.B = function(name)
         log("The other player started a boss fight with " .. name .. ".")
@@ -1383,7 +1517,8 @@ return function(api)
         if game.watchHitState then
             game.watchHitState(pawn, sendEvent)
         end
-        if next(net.partnerBosses) and game.keepBossBar and now >= (slow.barsAt or 0) then
+        -- (The game takes the bars down for a cutscene: put back at once, they'd flicker through it.)
+        if next(net.partnerBosses) and game.keepBossBar and now >= (slow.barsAt or 0) and not game.inCutscene() then
             slow.barsAt = now + BOSS_BAR_S
             for name in pairs(net.partnerBosses) do
                 local boss = enemyByName[name]
@@ -1392,8 +1527,24 @@ return function(api)
                 end
             end
         end
-        if game.watchPickups and now >= (slow.pickupsAt or 0) and game.watchPickups(pawn, reportPickup) ~= false then
-            slow.pickupsAt = now + PICKUP_S
+        -- (Never both in a frame: each looks through every actor of a kind.)
+        if game.watchPickups and now >= (slow.pickupsAt or 0) then
+            if game.watchPickups(pawn, reportPickup) ~= false then
+                slow.pickupsAt = now + PICKUP_S
+            end
+        elseif game.watchChests and now >= (slow.chestsAt or 0) then
+            slow.chestsAt = now + PICKUP_S
+            game.guardFormations()
+            game.hookGifts(sendGift)
+            game.hookPiles(reportChest)
+            game.watchChests(pawn, reportChest)
+        end
+        if #giftsWaiting > 0 and not game.isDead(pawn) then
+            takeGifts(pawn)
+        end
+        if game.watchGear and now >= (slow.gearAt or 0) then
+            slow.gearAt = now + GEAR_S
+            game.watchGear(pawn, sendGift)
         end
         if game.watchCurrency and now >= (slow.dustAt or 0) then
             slow.dustAt = now + CURRENCY_S
@@ -1502,8 +1653,21 @@ return function(api)
         end)
     end)
 
+    local watchFight
+
     local function stop()
         net.enabled = false
+        net.partnerFighting, net.toldFighting = false, nil
+        game.holdRespawn(nil, false)
+        watchFight(false)
+        if net.arriveUntil then
+            -- (The hold's end is watched by the tick that's stopping here.)
+            net.arriveUntil, net.arrival = nil, nil
+            local _, pawn = getPlayer1()
+            if valid(pawn) then
+                pawn.CharacterMovement:SetMovementMode(MOVE_WALKING, 0)
+            end
+        end
         if game.spectate then
             game.spectate(nil)
         end
@@ -1581,6 +1745,93 @@ return function(api)
     -- Spectating: a few seconds into our own death (the death screen's entrance plays first), the camera follows
     -- the other player while they're up and on our map; it comes back to us when we respawn or they go down.
     local SPECTATE_AFTER_S = 3.0
+    -- Dead in a boss fight the partner is still in: no respawn until it's over, by the boss dying, the partner dying too or
+    -- leaving. (Only there: anywhere else the wait could have no end.)
+    local HOLD_LOOK_S = 1.0
+    local HOLD_MAX_S = 900.0
+    local HOLD_GRACE_S = 5.0      -- the partner's boss bar can come up a few seconds after this player's
+    local IN_FIGHT_S = 3.0        -- a fight seen this recently counts: the game takes the bar down as the player dies
+    local FIGHT_TOLD_S = 5.0      -- told again this often while it lasts, for a partner who's only just linked
+    local FIGHT_GAP_S = 3.0       -- the bar can drop for a moment between a boss's phases
+
+    -- Whether the partner has a boss bar up: only their own game can say a fight is on. A boss nearby says nothing, and
+    -- the saves can differ on which bosses are alive at all.
+    handlers.F = function(on)
+        net.partnerFighting = on == "1"
+    end
+
+    local function tellFight(now)
+        if game.bossFightActive() or (net.toldFighting and game.inCutscene()) then
+            net.fightHereAt = now
+        end
+        local fighting = now - (net.fightHereAt or -FIGHT_GAP_S) < FIGHT_GAP_S
+        if fighting ~= net.toldFighting or (fighting and now >= (net.fightToldAt or 0)) then
+            net.toldFighting, net.fightToldAt = fighting, now + FIGHT_TOLD_S
+            sendEvent("F", fighting and 1 or 0)
+        end
+    end
+    extraTicksEarly.tellFight = function()
+        local now = os.clock()
+        if now >= (net.fightLookAt or 0) then
+            net.fightLookAt = now + HOLD_LOOK_S
+            tellFight(now)
+        end
+    end
+
+    -- A guest joining during a boss fight watches it as a player who's down does. From another map there's nothing to
+    -- watch: they're told, and go when it's over. The body stays behind with nobody steering, and the ground under it
+    -- unloads once the camera's gone: held in the air and kept alive till then, or it fell out of the world.
+    watchFight = function(on)
+        local _, pawn = getPlayer1()
+        if on == (net.watchingFight == true) then
+            if on and net.watchHeld and valid(pawn) and pawn.CharacterMovement.MovementMode ~= MOVE_NONE then
+                pawn.CharacterMovement:SetMovementMode(MOVE_NONE, 0)
+            end
+            return
+        end
+        net.watchingFight = on
+        if on then
+            if api.status then
+                api.status.notify("join", "your partner is in a boss fight: you'll join them when it's over.")
+            end
+            if valid(pawn) and valid(net.ghost) and not net.ghostHidden and net.target and net.target.Map == net.localMap then
+                pawn.CharacterMovement:SetMovementMode(MOVE_NONE, 0)
+                game.setMinHealth(pawn, 1)
+                game.spectate(net.ghost)
+                net.watchHeld = true
+            end
+        elseif net.watchHeld then
+            net.watchHeld = false
+            game.spectate(nil)
+            if valid(pawn) then
+                game.setMinHealth(pawn, 0)
+                if not (net.arriveUntil or net.arrival) then
+                    arriveAt(pawn, pawn:K2_GetActorLocation(), 0)     -- not gone anywhere: its own ground has to load again
+                end
+            end
+        end
+    end
+
+    local function holdForFight(pawn, partnerUp)
+        local now = os.clock()
+        if not net.holdLooking or now < (net.holdLookAt or 0) then
+            return
+        end
+        net.holdLookAt = now + HOLD_LOOK_S
+        local mayWait = partnerUp and not net.pvp and now - net.deadSince < HOLD_MAX_S
+        if mayWait and net.partnerFighting then
+            if game.holdRespawn(pawn, true) and not net.holdTold then
+                net.holdTold = true
+                if api.status then
+                    api.status.notify("hold", "you're down: you'll be back when the fight is over.")
+                end
+            end
+        elseif not mayWait or now - net.deadSince >= HOLD_GRACE_S then
+            net.holdLooking = false
+            game.holdRespawn(pawn, false)
+        end
+    end
+
     local function watchOwnDeath()
         local pawn = localPawn()
         if pawn == nil or not game.isDead then
@@ -1589,6 +1840,8 @@ return function(api)
         if game.isDead(pawn) then
             if net.deadSince == nil then
                 net.deadSince = os.clock()
+                net.holdLooking = net.deadSince - (net.fightSeenAt or -1e9) <= IN_FIGHT_S
+                net.holdTold = false
                 if game.hideAliveScreen then
                     game.hideAliveScreen()
                 end
@@ -1597,6 +1850,7 @@ return function(api)
                 return
             end
             local partnerUp = valid(net.ghost) and not net.ghostHidden
+            holdForFight(pawn, partnerUp)
             if partnerUp and os.clock() - net.deadSince >= SPECTATE_AFTER_S and not game.isSpectating() then
                 if game.spectate(net.ghost) then
                     log("You're down: watching the other player until you respawn.")
@@ -1607,7 +1861,10 @@ return function(api)
             end
         else
             net.deadSince = nil
-            if game.isSpectating and game.isSpectating() then
+            if game.bossFightActive() then
+                net.fightSeenAt = os.clock()
+            end
+            if game.isSpectating and game.isSpectating() and not net.watchingFight then
                 game.spectate(nil)
                 log("Back on your feet: camera back on you.")
             end
@@ -1674,6 +1931,11 @@ return function(api)
         handlers = handlers,       -- event type -> function(rest); other modules add their own types
         extraTicks = extraTicks,
         frameTicks = frameTicks,
+        joinPartner = joinPartner,
+        watchFight = function(on)
+            watchFight(on)
+        end,
+        linked = linked,
         enemyActor = function(name)
             return enemyByName[name]
         end,

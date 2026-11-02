@@ -1,0 +1,6 @@
+param([double]$Timeout = 120)
+. (Join-Path $PSScriptRoot 'tourlib.ps1')
+"guest: " + (Wait-Player $script:C $Timeout)
+"host: " + (Wait-Player $script:H 20)
+(Ask $script:H 'return STORY.where()') 
+(Ask $script:C 'return STORY.where()')

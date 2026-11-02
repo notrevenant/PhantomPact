@@ -1,7 +1,7 @@
-# Local co-op (split screen) in Phantom Pact 1.4.2
+# Local co-op (split screen) in Phantom Pact 1.5.0
 
 `Role = Local` in `PhantomPact.ini` puts two players on one PC, side by side on one screen, no internet and no second
-PC. It is in testing: the whole of 1.4.2's local co-op work was done on Xigu with two DualSense pads through
+PC. It is in testing: the whole of 1.5.0's local co-op work was done on Xigu with two DualSense pads through
 DS4Windows, and the rest of the game has not been walked through yet.
 
 ## Setup
@@ -33,7 +33,7 @@ for those and performs the action with player 2's own body:
 The prompt for Cross or Circle shows on player 2's half of the screen with the game's own button pictures,
 PlayStation or Xbox according to what the game shows player 1.
 
-## What the game hardwires to player 1, and how 1.4.2 bridges it
+## What the game hardwires to player 1, and how 1.5.0 bridges it
 
 - **Interaction search and prompts** run for player 1 only. The mod searches around player 2 with the game's own
   reach rules and starts the interaction through player 2's interact component (climb spots) or through player 1's

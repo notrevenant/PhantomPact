@@ -34,7 +34,7 @@ every row has been rechecked. Protocol 3 hasn't run between two real PCs yet.
 
 Each player needs their own copy of PBZ, UE4SS + PBZCoop installed, and Tailscale (or any network where the client can
 reach the host's UDP port 47800). The steps are in [INSTALL.md](../INSTALL.md): set `Role` and `HostAddress` in
-`PhantomPact.ini`, start the game, load a save, or, in testing, set `OnlinePanel = On` and use the panel (F4) to host, join or leave with no restart.
+`PhantomPact.ini`, start the game, load a save, or press F5 in the game for the online panel (`OnlinePanel = On`, the default) to host, join or leave with no restart.
 `autostart.lua` starts the relay in main.dll and turns sync on once you're in the world. There's nothing else to run.
 
 Link status: `ue4ss\Mods\PBZCoop\net_status.txt`, or the mod command `netstatus`. INSTALL.md explains what its numbers
@@ -81,7 +81,7 @@ Known limits found in testing:
 ## Protocol
 
 See [NETCODE.md](NETCODE.md): why it was rewritten, what was measured, the packets, the sure and quick lanes and the
-events. Protocol 3 came with 1.4.2 and replaced the file-based relay and the JSON packets of protocol 2. 1.4.1 or older
+events. Protocol 3 came with 1.5.0 and replaced the file-based relay and the JSON packets of protocol 2. 1.4.1 or older
 can't connect to it, and a partner on one shows as `partner_version=1.4.1-or-older` in `net_status.txt`.
 
 ## Testing

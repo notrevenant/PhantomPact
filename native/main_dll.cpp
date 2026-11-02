@@ -36,7 +36,7 @@ void find_folders() {
 
 // In local co-op (pads_watch.txt exists) the joysticks' state goes to pads.txt, one line per XInput slot: "0" unplugged,
 // "1" plugged in, "2" with a button held. While the panel is open (pads_want.txt exists) that's faster, and the cursor,
-// left button, Escape, F4 and whether this game has the focus go to mouse.txt: the panel lets go of the mouse, and then the
+// left button, Escape, F4 or F5 and whether this game has the focus go to mouse.txt: the panel lets go of the mouse, and then the
 // game itself sees no input.
 // XInput is loaded here, not linked, so a PC without it still runs.
 bool down(int key) {
@@ -44,14 +44,20 @@ bool down(int key) {
 }
 
 // The game keeps the real cursor pinned to the screen's centre until a click lands, whatever the input mode: click once
-// for the player as the panel opens, on the panel's empty middle.
-void free_cursor() {
+// for the player as the panel opens, on the panel's empty middle, and again each time the game gets the focus back. False
+// while the cursor is over something else: a click there would land on that window.
+bool free_cursor() {
+    HWND window = GetForegroundWindow();
     DWORD process = 0;
-    GetWindowThreadProcessId(GetForegroundWindow(), &process);
-    if (process != GetCurrentProcessId()) return;
+    GetWindowThreadProcessId(window, &process);
+    POINT cursor{};
+    if (process != GetCurrentProcessId() || !GetCursorPos(&cursor)) return false;
+    GetWindowThreadProcessId(WindowFromPoint(cursor), &process);
+    if (process != GetCurrentProcessId()) return false;
     mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
     Sleep(FREE_CLICK_MS);
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+    return true;
 }
 
 DWORD WINAPI pads_thread(void*) {
@@ -64,7 +70,7 @@ DWORD WINAPI pads_thread(void*) {
     const std::wstring want = mod_dir + L"\\pads_want.txt";
     const std::wstring watch = mod_dir + L"\\pads_watch.txt";
     const std::wstring path = mod_dir + L"\\pads.txt";
-    bool was_open = false;
+    bool was_open = false, had_focus = false, free_due = false;
     while (true) {
         const bool open = GetFileAttributesW(want.c_str()) != INVALID_FILE_ATTRIBUTES;
         if (open || GetFileAttributesW(watch.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -80,21 +86,24 @@ DWORD WINAPI pads_thread(void*) {
             route::xinput_pads = pads;
         }
         if (open) {
-            if (!was_open) {
-                Sleep(FREE_DELAY_MS);
-                free_cursor();
-            }
-            ClipCursor(nullptr);
-            POINT cursor{};
             HWND window = GetForegroundWindow();
             DWORD owner = 0;
             GetWindowThreadProcessId(window, &owner);
+            const bool focus = owner == GetCurrentProcessId();
+            if (!was_open || (focus && !had_focus)) {
+                free_due = true;
+                Sleep(FREE_DELAY_MS);
+            }
+            had_focus = focus;
+            if (free_due && free_cursor()) free_due = false;
+            ClipCursor(nullptr);
+            POINT cursor{};
             if (GetCursorPos(&cursor) && window && ScreenToClient(window, &cursor))
                 relay::write_atomic(mod_dir + L"\\mouse.txt",
                                     std::to_string(cursor.x) + " " + std::to_string(cursor.y) + " "
                                         + (down(VK_LBUTTON) ? "1 " : "0 ") + (down(VK_ESCAPE) ? "1 " : "0 ")
-                                        + (down(VK_F4) ? "1 " : "0 ")
-                                        + (owner == GetCurrentProcessId() ? "1\n" : "0\n"));   // this game has the focus
+                                        + ((down(VK_F4) || down(VK_F5)) ? "1 " : "0 ")
+                                        + (focus ? "1\n" : "0\n"));   // this game has the focus
             Sleep(PADS_MS);
         } else {
             Sleep(POLL_MS);
