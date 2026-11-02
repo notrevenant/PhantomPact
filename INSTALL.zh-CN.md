@@ -23,8 +23,8 @@
 1. 打开游戏文件夹:Steam > 右键点击游戏 > 管理 > 浏览本地文件。
 2. 把压缩包里的所有内容解压到这个文件夹(`PBZ` 文件夹),提示合并文件夹时选择“是”。模组会放到 `platform\steam\ue4ss\Mods\PBZCoop`。
 3. 用记事本打开 `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`:
-   - **房主:** 把 `Role = Guest` 改成 `Role = Host`
-   - **客人:** 把 `HostAddress` 设为房主在虚拟局域网工具里显示的 IP 地址
+   - **房主:** 把 `Role = Off` 改成 `Role = Host`
+   - **客人:** 把 `Role = Off` 改成 `Role = Guest`,再把 `HostAddress` 设为房主在虚拟局域网工具里显示的 IP 地址
    - **使用 UU 加速器或 ZeroTier 时:** 房主还要设置 `AllowAnyAddress = On`。保留 `Connect = Tailscale` 即可,它只表示“通过 IP 连接”。
 4. 启动游戏并读取存档,房主先进。进入游戏世界后联机会自动开始。第一次做房主时,Windows 会询问是否允许游戏使用网络,必须点击**允许**,让游戏通过防火墙。这个窗口可能出现在游戏后面,如果客人连不上,请按 Alt+Tab 查看。
 

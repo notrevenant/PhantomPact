@@ -29,8 +29,8 @@
 
 1. 双方都安装 [UE4SS for Phantom Blade Zero](https://www.nexusmods.com/phantombladezero/mods/5),以及一款虚拟局域网工具(UU 加速器联机功能、Tailscale 等)。
 2. 把发布的压缩包解压到游戏的 `PBZ` 文件夹。
-3. 编辑 `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`:房主设置 `Role = Host`,客人把 `HostAddress` 设为房主的虚拟局域网 IP。
-4. 启动游戏并读取存档,房主先进。联机会自动开始。(测试中:在 ini 里设置 `OnlinePanel = On` 后,在游戏中按 F4 打开联机面板,可以直接做房主、加入或离开,不需要重启游戏。)
+3. 编辑 `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`:房主设置 `Role = Host`,客人设置 `Role = Guest`,并把 `HostAddress` 设为房主的虚拟局域网 IP。
+4. 启动游戏并读取存档,房主先进。联机会自动开始。也可以在游戏中按 F5 打开联机面板,直接开房或加入,不用改文件。
 
 目前是早期版本,支持两名玩家。
 

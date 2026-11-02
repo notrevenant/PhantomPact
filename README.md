@@ -36,8 +36,8 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 
 1. Install [UE4SS for Phantom Blade Zero](https://www.nexusmods.com/phantombladezero/mods/5) and [Tailscale](https://tailscale.com) (both players).
 2. Extract the release zip into the game's `PBZ` folder.
-3. In `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`: host sets `Role = Host`, guest sets `HostAddress` to
-   the host's Tailscale IP.
+3. In `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`: host sets `Role = Host`, guest sets `Role = Guest` and
+   `HostAddress` to the host's Tailscale IP.
 4. Start the game and load your saves, the host first. Co-op starts by itself. Or press F5 in the game for the online panel: Host or Guest with no text file.
 
 Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).

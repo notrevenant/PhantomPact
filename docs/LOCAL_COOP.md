@@ -16,6 +16,27 @@ DS4Windows, and the rest of the game has not been walked through yet.
 Player 2 shares player 1's save, backpack, dust and gourd count, and rests at the same bells. Player 2 cannot die for
 good: at zero health they are down for a while and come back beside player 1.
 
+## Pads
+
+PlayStation pads need this setup, with one pad or two. Without it the game sends every pad to player 1, and input can
+freeze for a moment. It's the setup two DualSense pads were tested with.
+
+1. **Turn off Steam Input.** In Steam, right-click the game > Properties > Controller, then pick Disable Steam Input.
+2. **Install [DS4Windows](https://github.com/schmaldeo/DS4Windows/releases)**, connect your pads and leave it running.
+   The game then sees them as Xbox pads.
+3. **Install [HidHide](https://github.com/nefarius/HidHide/releases)**, which stops the game seeing the real pads as
+   well. Open it, add `DS4Windows.exe` under Applications, then on the Devices tab tick your pads and Enable device
+   hiding.
+4. **Check DS4Windows.** The Ex column should show a tick for each pad. If it doesn't, reconnect the pads.
+5. **Start the game, then press F4.** Hold a button on each pad to light up its card, drag the cards onto the players
+   and press APPLY.
+
+Xbox pads shouldn't need any of this, but they haven't been tested. Keyboard and mouse for player 1 with a pad for
+player 2 also works: drag the Keyboard & Mouse card onto player 1 in the same panel.
+
+Online co-op needs none of this. If your pads stop working in other games, turn off Enable device hiding in HidHide. A
+game update can break two-pad play until the mod is updated, because it depends on the game's exact build.
+
 ## Player 2's controls
 
 The game only reads some things from "the player", which is always player 1, so the mod reads player 2's pad itself

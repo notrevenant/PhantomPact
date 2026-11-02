@@ -29,9 +29,11 @@ repository (`native/`).
 2. Extract everything in the zip into that folder (the `PBZ` folder) and say yes to merging folders.
    The mod lands in `platform\steam\ue4ss\Mods\PBZCoop`.
 3. Open `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini` in Notepad:
-   - **Host:** change `Role = Guest` to `Role = Host`
-   - **Guest:** set `HostAddress` to the host's Tailscale IP (it starts with 100.; the host sees it in the
-     Tailscale app)
+   - **Host:** change `Role = Off` to `Role = Host`
+   - **Guest:** change `Role = Off` to `Role = Guest`, and set `HostAddress` to the host's Tailscale IP (it starts
+     with 100.; the host sees it in the Tailscale app)
+
+   Or skip this file and use the panel, below.
 4. Start the game and load your saves, the host first. Co-op starts by itself once you're in the world.
    The first time you host, Windows asks whether the game may use the network: click **Allow**. That window can open
    behind the game, so Alt+Tab if the guest can't connect.
