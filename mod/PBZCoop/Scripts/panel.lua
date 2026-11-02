@@ -26,6 +26,7 @@ return function(api)
     }
     local CLOSE = { x = 848, y = 14, w = 38, h = 38 }
     local APPLY = { x = 690, y = 490, w = 170, h = 46 }
+    local ONLINE = { x = 40, y = 490, w = 170, h = 46 }     -- across from it: back to online play at the next start
     local CARDS = { "kbm", "joy1", "joy2", "joy3", "joy4" }
 
     local panel = { open = false }
@@ -49,6 +50,49 @@ return function(api)
 
     local function key(name)
         return { KeyName = FName(name) }
+    end
+
+    -- PhantomPact.ini, for both panels. Only these lines change: comments, the other settings and the file's line ends stay as
+    -- they are.
+    local function save(values)
+        local path = api.modDir() .. "PhantomPact.ini"
+        local f = io.open(path, "rb")
+        local text = f and f:read("a") or ""
+        if f then
+            f:close()
+        end
+        local out, seen, at = {}, {}, 1
+        while at <= #text do
+            local stop = text:find("\n", at, true) or #text
+            local line = text:sub(at, stop)
+            local name_ = line:match("^%s*([%w_]+)%s*=")
+            for name, value in pairs(values) do
+                if name_ and name_:lower() == name:lower() then
+                    line = name .. " = " .. value .. (line:match("\r?\n$") or "")
+                    seen[name] = true
+                end
+            end
+            out[#out + 1] = line
+            at = stop + 1
+        end
+        for name, value in pairs(values) do
+            if not seen[name] then
+                out[#out + 1] = name .. " = " .. value .. "\n"
+            end
+        end
+        local tmp = io.open(path .. ".tmp", "wb")
+        local wrote = tmp and tmp:write(table.concat(out))
+        if tmp then
+            tmp:close()
+        end
+        if not wrote then
+            log("Couldn't save PhantomPact.ini: this choice lasts until the game closes.")
+            return
+        end
+        os.remove(path)
+        if not os.rename(path .. ".tmp", path) then
+            log("Couldn't save PhantomPact.ini: see PhantomPact.ini.tmp in " .. api.modDir())
+        end
     end
 
     local function part(name, tex, w, h, z)
@@ -236,6 +280,7 @@ return function(api)
         picture(apply, os.clock() < appliedUntil and "applied" or "apply")
         place(apply, APPLY.x, APPLY.y)
         dim(apply, ready() and 1.0 or 0.35)
+        place(part("multiplayer", "multiplayer", ONLINE.w, ONLINE.h, 1), ONLINE.x, ONLINE.y)
     end
 
     local function drop(x, y)
@@ -260,6 +305,14 @@ return function(api)
     local function press(x, y)
         if inside(x, y, CLOSE) then
             panel.close()
+            return
+        end
+        -- With Role = Local the online panel doesn't start, so this is the way back. From the next start: Role is read once, and
+        -- local co-op can't be taken down live. (Removing player 2 at the wrong moment has killed the game's menus.)
+        if inside(x, y, ONLINE) then
+            save({ Role = "Off" })
+            api.status.lastShown.mode = nil
+            api.status.notify("mode", "Multiplayer starts the next time you start the game.")
             return
         end
         for n, r in ipairs(TABS) do
@@ -448,13 +501,18 @@ return function(api)
         if rest == "toggle" then
             panel.toggle()
         end
+        local x, y = (rest or ""):match("^press (%S+) (%S+)$")
+        if x then
+            press(tonumber(x), tonumber(y))
+        end
         log(string.format("Panel %s: %d players, %s, p1 %s, p2 %s", panel.open and "open" or "closed", choice.players,
             choice.layout, tostring(choice.p1), tostring(choice.p2)))
     end
 
     -- What the online panel (onlinepanel.lua) draws and reads with: the same units, widgets and input.
     panel.kit = { W = W, H = H, origin = origin, parts = parts, part = part, place = place, hide = hide, dim = dim,
-        picture = picture, measure = measure, input = input, inside = inside, key = key, blockPlay = blockPlay, writeWant = writeWant }
+        picture = picture, measure = measure, input = input, inside = inside, key = key, blockPlay = blockPlay, writeWant = writeWant,
+        save = save }
 
     return panel
 end

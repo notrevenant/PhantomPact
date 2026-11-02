@@ -284,6 +284,10 @@ return function(api)
     end
 
     function pvp.set(on)
+        if on and net.party then
+            api.status.notify("pvp", "PvP is off with more than two players.")     -- a duel has two sides, and one ghost to fight
+            return
+        end
         pvp.on = on
         net.pvp = on
         local _, pawn = getPlayer1()

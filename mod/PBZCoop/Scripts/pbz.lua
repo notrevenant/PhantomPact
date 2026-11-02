@@ -28,6 +28,15 @@ return function(api)
     local codexBoss = {}          -- class name (without _C) -> bIsBoss, filled lazily
     local syncing = false         -- true while the mod itself changes health, so OnDamage isn't re-reported
     local ghostBusyUntil = 0
+    local busyGhosts = {}         -- with more than two players: ghost address -> the same, as each has moves of its own
+
+    local function holdGhost(ghost)
+        if api.coop and api.coop.net.party then
+            busyGhosts[ghost:GetAddress()] = os.clock() + GHOST_BUSY_S
+        else
+            ghostBusyUntil = os.clock() + GHOST_BUSY_S
+        end
+    end
 
     local function className(actor)
         return actor:GetClass():GetFName():ToString()
@@ -958,8 +967,8 @@ return function(api)
 
     -- The ghost started one of the partner's moves some other way (a montage, moves.lua): don't steer it while
     -- the move's own motion plays, and count it for the hit attribution above.
-    function game.noteGhostMove()
-        ghostBusyUntil = os.clock() + GHOST_BUSY_S
+    function game.noteGhostMove(ghost)
+        holdGhost(ghost)
         ghostMoveAt = os.clock()
     end
 
@@ -1142,10 +1151,13 @@ return function(api)
     end
 
     local clearHitStateLater      -- defined below with staggerSelf
-    local ghostHitComp = nil
+    local ghostHitComps = {}      -- ghost address -> its component: a search of them all, so never once per hit
     function game.playHitReaction(ghost, tag)
-        if not valid(ghostHitComp) or ghostHitComp:GetOwner():GetAddress() ~= ghost:GetAddress() then
+        local addr = ghost:GetAddress()
+        local ghostHitComp = ghostHitComps[addr]
+        if not valid(ghostHitComp) or ghostHitComp:GetOwner():GetAddress() ~= addr then
             ghostHitComp = hitreactComponent(ghost)
+            ghostHitComps[addr] = ghostHitComp
         end
         if ghostHitComp then
             -- Already reacting (on the host, enemies here hit the ghost too): one stagger, not the same one twice.
@@ -1159,7 +1171,7 @@ return function(api)
             else
                 clearHitStateLater(ghostHitComp, tag)
             end
-            ghostBusyUntil = os.clock() + GHOST_BUSY_S
+            holdGhost(ghost)
         end
     end
 
@@ -1385,7 +1397,10 @@ return function(api)
         return true
     end
 
-    function game.ghostBusy()
+    function game.ghostBusy(ghost)
+        if api.coop and api.coop.net.party then
+            return os.clock() < (busyGhosts[ghost:GetAddress()] or 0)
+        end
         return os.clock() < ghostBusyUntil
     end
 
@@ -1435,16 +1450,18 @@ return function(api)
     -- Walking its hatred list takes about ten calls, so one that has the ghost on it isn't asked again for a while.
     local HATE_RECHECK_S = 5.0
     local hatesGhost = {}         -- enemy address -> os.clock() of the next look
-    function game.hateGhost(e, ghost, addr, x, y, z)
+    -- who: which ghost, with more than one, and at: where it is, known without asking the game.
+    function game.hateGhost(e, ghost, addr, x, y, z, who, at)
         local now = os.clock()
-        if now < (hatesGhost[addr] or 0) then
+        local key = who and (who .. ":" .. addr) or addr
+        if now < (hatesGhost[key] or 0) then
             return
         end
-        local g = ghost:K2_GetActorLocation()
+        local g = at or ghost:K2_GetActorLocation()
         if not (x and distance({ X = x, Y = y, Z = z }, g) <= GHOST_AGGRO_CM) then
             return
         end
-        hatesGhost[addr] = now + HATE_RECHECK_S
+        hatesGhost[key] = now + HATE_RECHECK_S
         pcall(function()
             local hm = e.BP_PBZHatredManagerComponent
             local already = false
@@ -1472,6 +1489,7 @@ return function(api)
     local FOCUS_REACH_CM = GHOST_AGGRO_CM   -- farther off than this a player isn't in this fight
     local focused = {}            -- enemy address -> { picker, onGuest, since, hp }
     local hitByPartner = {}       -- enemy address -> os.clock() of the partner's last hit
+    local hitBySlot = {}          -- with more than two players: "<slot>:<enemy address>" -> the same
 
     local function targetPicker(actor)
         local found = nil
@@ -1517,6 +1535,15 @@ return function(api)
         return valid(ghost) and target:GetAddress() == ghost:GetAddress() and "guest" or "host"
     end
 
+    -- The same with more than two players: the slot of who it's after, or "-". ghosts: ghost address -> slot.
+    function game.enemyAfterSlot(actor, ghosts)
+        local target = currentTarget(actor)
+        if target == nil then
+            return "-"
+        end
+        return ghosts[target:GetAddress()] or 1
+    end
+
     -- Guest: a move lunges at its enemy's target, so a copy with none fell short of the host's and was dragged the rest of the
     -- way, attack pose and all. It's given the host's target, and its own picker is told to leave that alone.
     local copyPickers = {}        -- enemy address -> its target picker
@@ -1538,12 +1565,15 @@ return function(api)
         end)
     end
 
-    function game.partnerHit(addr)
+    function game.partnerHit(addr, slot)
         hitByPartner[addr] = os.clock()
+        if slot then
+            hitBySlot[slot .. ":" .. addr] = os.clock()
+        end
     end
 
     function game.forgetFocus()
-        focused, hitByPartner = {}, {}
+        focused, hitByPartner, hitBySlot = {}, {}, {}
     end
 
     function game.steerFocus(actor, addr, x, y, z, hp, pawn, ghost)
@@ -1590,6 +1620,83 @@ return function(api)
                 turnTo(actor, f.picker, pawn, ghost)
             else
                 turnTo(actor, f.picker, ghost, pawn)
+            end
+        end
+    end
+
+    -- With more than two players the rule is the same: one target for FOCUS_S, then whoever hit it last among the others near
+    -- it, if anyone did. Holding comes first, however much the others hit it, so a crowd can't make it spin. Turning takes all
+    -- the others off the list for that moment. players: { body, addr, at, slot, mine } for each.
+    function game.steerPartyFocus(actor, addr, x, y, z, hp, players)
+        local at, near, on = { X = x, Y = y, Z = z }, {}, nil
+        for _, who in ipairs(players) do
+            if distance(at, who.at) <= FOCUS_REACH_CM then
+                near[#near + 1] = who
+            end
+        end
+        if #near < 2 then
+            return
+        end
+        local target = currentTarget(actor)
+        if target == nil then
+            focused[addr] = nil
+            return
+        end
+        local targetAddr = target:GetAddress()
+        for _, who in ipairs(near) do
+            if who.addr == targetAddr then
+                on = who
+            end
+        end
+        if on == nil then
+            return
+        end
+        local now, f = os.clock(), focused[addr]
+        if f == nil or not valid(f.picker) then
+            f = { picker = targetPicker(actor), slot = on.slot, since = now, hp = hp }
+            focused[addr] = f
+            if f.picker == nil then
+                return
+            end
+            f.picker.SwitchTargetCooldown = FOCUS_S
+        end
+        local dropped = f.hp and hp and hp < f.hp - 0.5
+        f.hp = hp
+        if f.slot ~= on.slot then
+            f.slot, f.since = on.slot, now
+        end
+        if now - f.since < FOCUS_S then
+            return
+        end
+        local best, bestAt = nil, now - FOCUS_HIT_S
+        for _, who in ipairs(near) do
+            if who ~= on then
+                local hitAt = hitBySlot[who.slot .. ":" .. addr]
+                if who.mine then
+                    hitAt = (dropped and game.localMoveRecent(FOCUS_HIT_S)) and now or nil
+                end
+                if hitAt and hitAt > bestAt then
+                    best, bestAt = who, hitAt
+                end
+            end
+        end
+        if best then
+            f.since = now
+            local hatred = actor.BP_PBZHatredManagerComponent
+            if valid(hatred) and hatred:CheckCanHatredTarget(best.body) ~= false then
+                hatred:AddActorToHatredList(best.body, {})
+                for _, who in ipairs(near) do
+                    if who ~= best then
+                        hatred:RemoveActorFromHatredList(who.body)
+                    end
+                end
+                f.picker.LastSwitchTime = 0
+                f.picker:TrySwitchTarget()
+                for _, who in ipairs(near) do
+                    if who ~= best then
+                        hatred:AddActorToHatredList(who.body, {})
+                    end
+                end
             end
         end
     end
@@ -1995,6 +2102,7 @@ return function(api)
     local OWN_ITEM_S = 0.2          -- what comes this soon after buying or making something is that
     local GEAR = { MedicineInfos = "medicine", Accessories = "accessory" }
     local givenHere, gearKnown, ownUntil = {}, nil, 0
+    local gotFrom = {}              -- with more than two players: what came from whom, and when
     local giftsHooked = false
 
     local function given(id, count, kind, send)
@@ -2062,11 +2170,21 @@ return function(api)
         end
     end
 
-    function game.receiveGift(pawn, id, count, kind)
-        local here = givenHere[id .. "x" .. count]
+    -- from: who it came from, with more than two players: two partners given the same thing in a moment are one thing too.
+    function game.receiveGift(pawn, id, count, kind, from)
+        local key = id .. "x" .. count
+        local here = givenHere[key]
         if here and os.clock() - here < SAME_GIFT_S then
             log("The game gave " .. id .. " here too: one each.")
             return
+        end
+        if from then
+            local last = gotFrom[key]
+            if last and last.from ~= from and os.clock() - last.at < SAME_GIFT_S then
+                log("Two players got " .. id .. ": one each.")
+                return
+            end
+            gotFrom[key] = { from = from, at = os.clock() }
         end
         if gearKnown then
             gearKnown[id] = true

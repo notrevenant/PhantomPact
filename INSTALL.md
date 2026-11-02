@@ -9,8 +9,10 @@ Fan-made, unofficial. Each player needs their own copy of the game on Steam. No 
 https://github.com/yhsharaf/PhantomPact/issues. [What to send](#what-to-send-in-a-bug-report) is at the end of this
 guide.
 
-**Two players on one PC?** It's in this same download: set `Role = Local` in `PhantomPact.ini`, plug in two pads, and
-read `Phantom Pact - LOCAL CO-OP.md`, next to this guide, for player 2's controls. It is in testing.
+**Two players on one PC?** It's in this same download: in the game press F5, then MORE, set Mode to LOCAL and restart
+the game. Plug in two pads, and read `Phantom Pact - LOCAL CO-OP.md`, next to this guide, for player 2's controls and how to
+set up pads. It is in testing. (`Role = Local` in `PhantomPact.ini` does the same. F4 > MULTIPLAYER goes back, from the next
+start.)
 
 ## What you need (both players)
 
@@ -48,8 +50,9 @@ a home network; Other Network is for ZeroTier and UU Accelerator. If you want a 
 password on both PCs before you connect. English and 中文 at the top of the panel switch the language of the panel
 and the co-op messages. Your choices are kept for the next start.
 
-**MORE** opens the settings: TP > PARTNER, PvP, the partner compass, your partner on the map and Steam Direct, each ON
-or OFF. Revive is coming soon. Enemy difficulty is the game's own setting. With a partner, enemies always get extra health and
+**MORE** opens the settings: TP > PARTNER, PvP, the partner compass, your partner on the map, Steam Direct and 4 PLAYERS
+(Beta), each ON or OFF, and Mode: MULTIPLAYER, or LOCAL for two players on this PC. Mode works from the next time you start the
+game. Revive is coming soon. Enemy difficulty is the game's own setting. With a partner, enemies always get extra health and
 posture on top of it.
 
 **Going to your partner.** Joining takes you to the host once, even on another map, so a friend with a new save can
@@ -57,6 +60,27 @@ join a host further into the story. Your save stays where you land, so your own 
 After that, **F3** takes you to your partner if you turn TP > PARTNER on under MORE. It's off by default, because it's a
 lot of power to have on one key. Neither works during a boss fight, a cutscene, a duel or a menu, or while you or your
 partner are down.
+
+### 4 players (Beta)
+
+4 PLAYERS under MORE is off by default, and with it off nothing changes. Turn it on before you press Host, and up to three
+guests can join: four players in all. Only the host's switch counts: guests follow it, whatever theirs says. It works from the
+next Host (`FourPlayers = On` in the ini does the same). Everyone joins as they would with two players, and everyone needs the
+same version. It hasn't been played by four people yet: tell us what breaks.
+
+With more than two players:
+
+- Each player has a number and a colour, the same on every PC, on the compass and the map and in the tips: the host is purple,
+  player 2 green, player 3 gold, player 4 blue. Red still means down. The panel says how many are connected and who you are.
+- F3 goes to the nearest partner who's up. If nobody's on your map, a guest goes to the host.
+- Enemies get more health and posture for each person connected: see [Co-op difficulty](#co-op-difficulty).
+- Die in a boss fight and you wait until the boss dies or everyone else is down too. The camera moves to someone who's still up.
+- What anyone gets, everyone gets, and if two of you are given the same thing at once it counts once.
+- If a guest drops out the others play on. If the host leaves, it's over for everyone.
+- Enemies are shared near the host, and near a guest up to 120 m from the host. Further off the host's game leaves them
+  asleep, so each guest out there fights a copy of their own, and the first kill counts for everyone.
+- PvP and Revive stay off.
+- The host sends about 50-100 KB/s with three guests, so a slow upload will show.
 
 - **Updating:** both players update. Extract the new version over the old one, then set `Role` / `HostAddress` again.
   What an older version left in the `PBZCoop` folder (the `relay` folder, and `net_in.txt`, `net_out.txt` and the
@@ -93,6 +117,11 @@ partner are down.
 Like Elden Ring, enemies and bosses get tougher while your partner is with you: 150% health and 130% posture by
 default. Change `CoopEnemyHealth` / `CoopEnemyPosture` in `PhantomPact.ini` (percent; 100 = normal). Both
 players should use the same numbers.
+
+With 4 PLAYERS (Beta) on, each person connected adds the same again, wherever they are, on another map, loading or down: 200%
+and 160% with two connected, 250% and 190% with three. It only goes up, so a boss doesn't lose health when someone dies or
+leaves. Someone who joins during a boss fight only watches, so that boss keeps its number until the fight is over, while other
+enemies rise at once.
 
 ## PvP (duels)
 

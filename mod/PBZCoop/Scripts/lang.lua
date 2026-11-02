@@ -30,6 +30,9 @@ return function()
         ["your partner is back."] = "队友回来了。",
         ["your partner is watching a cutscene."] = "队友正在观看过场动画。",
         ["partner disconnected."] = "队友已断开连接。",
+        ["PvP is off with more than two players."] = "超过两名玩家时 PvP 关闭。",
+        ["Local co-op starts the next time you start the game."] = "下次启动游戏时开始本地分屏。",
+        ["Multiplayer starts the next time you start the game."] = "下次启动游戏时恢复多人联机。",
         ["TP > PARTNER is off. Turn it on in MORE (F5)."] = "传送到队友已关闭。可在 F5 的“更多”里开启。",
         ["couldn't reach your partner in time. TP > PARTNER in MORE (F5) can take you there."] =
             "没能及时传送到队友身边。可在 F5 的“更多”里开启传送到队友。",
@@ -87,7 +90,23 @@ return function()
             "房主(%1)没有回应。请检查地址和端口、房主是否已在游戏里开房,以及双方的密码和 Phantom Pact 版本是否相同。" },
         { "^no friend hosting found%..*$",
             "没有找到正在开房的好友。你们必须是 Steam 好友,对方要开房并使用 Steam,而且不能隐身;双方的密码和 Phantom Pact 版本也要相同。" },
+        -- More than two players. (Each player's own lines are added below.)
+        { " Players: (%d) of (%d)%.", " 玩家:%1/%2。" },
+        { "^player (%d) is on Phantom Pact (.+) and you're on (.+): use the same version, or enemies won't stay in step%.$",
+            "玩家 %1 使用 Phantom Pact %2,你使用 %3:请使用相同的版本,否则敌人会不同步。" },
     }
+
+    -- What's said of a player by name, one row for each: they start with the name, so they can't reach any other line.
+    for _, who in ipairs({ { "the host %(purple%)", "房主(紫)" }, { "player 2 %(green%)", "玩家 2(绿)" },
+        { "player 3 %(gold%)", "玩家 3(金)" }, { "player 4 %(blue%)", "玩家 4(蓝)" } }) do
+        for _, line in ipairs({ { " joined%. (%d) players now%.$", " 加入了。现在有 %1 名玩家。" },
+            { " left%. (%d) players now%.$", " 离开了。现在有 %1 名玩家。" }, { " is down%.$", " 倒下了。" }, { " is back%.$", " 回来了。" },
+            { " is watching a cutscene%.$", " 正在观看过场动画。" }, { " is on another map%.$", " 在另一张地图上。" },
+            { " is (%d+) m away%.$", " 在 %1 米外。" } }) do
+            PARTS[#PARTS + 1] = { "^" .. who[1] .. line[1], who[2] .. line[2] }
+        end
+        PARTS[#PARTS + 1] = { " You're " .. who[1] .. "%.$", " 你是" .. who[2] .. "。" }
+    end
 
     function lang.set(word)
         lang.code = (word or ""):lower() == "chinese" and "zh" or "en"

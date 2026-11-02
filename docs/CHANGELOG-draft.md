@@ -24,6 +24,8 @@ Not posted. For the user to edit and post, on GitHub and Nexus.
 - New: join while the host is in a boss fight and you watch it, then go to them when it's over
 - The game no longer pauses with a partner linked, in the F5 panel or the game's own menu: enemies keep coming
 - New: with both players in a fight, an enemy stays on one of you for a while, then turns on the other if they've been hitting it
+- New (beta): 4 PLAYERS under MORE in the F5 panel. Turn it on as host and up to three guests can join. Each player has a colour on the compass and the map, enemies and bosses get 50% more health for each person connected, and what anyone gets, everyone gets. It's off by default, and with it off nothing changes. PvP and Revive stay off with more than two. Design and first code by EXACG, thank you
+- New: Mode under MORE in the F5 panel: pick LOCAL for split screen on one PC instead of editing a file, then restart the game. MULTIPLAYER in the F4 panel goes back
 - Fixed: bosses' attacks on the guest looked like hits but did no damage
 - Fixed: enemies went on attacking a partner who had left or gone down
 - Fixed: enemies could lose huge chunks of health, or die, from hits nobody made, when a guest arrived or rejoined
@@ -45,3 +47,4 @@ Install: extract the zip into your Phantom Blade Zero folder (both players), see
 - The 60 to 38 FPS line is from a run whose baseline was 60; the new run's baseline was 52-54. That's why both numbers
   are given: "38 to 55" alone would overstate it.
 - Local co-op ships in the same zip as online, off unless `Role = Local`.
+- 4 PLAYERS is a beta: say so in the post.

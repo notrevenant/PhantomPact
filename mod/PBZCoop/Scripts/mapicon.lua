@@ -1,4 +1,5 @@
--- Your partner on the open map (PhantomPact.ini PartnerMapIcon; from appdoze's PR #6). A copy of the game's own player
+-- Your partner on the open map (PhantomPact.ini PartnerMapIcon; from appdoze's PR #6). With more than two players there's a
+-- pointer each (EXACG's, PR #11), in that player's colour (coop.players). A copy of the game's own player
 -- marker (the map's WB_PlayerIcon) in jade, on the same canvas (WB_MapNew_C.Gadget, where the map's icons live), so it
 -- pans and zooms with the map and hides with it on the world map. Red while they're down, like the compass. Same area
 -- only.
@@ -23,12 +24,23 @@ return function(api)
     local ticks = 0
     local icon, owner, openMap, scaleX, scaleY
     local hidden = true
+    local pointers = {}             -- more than two players: slot -> { widget, owner, hidden }
+
+    local function hidePointer(one)
+        if not one.hidden and valid(one.widget) then
+            pcall(function() one.widget:SetVisibility(1) end)
+        end
+        one.hidden = true
+    end
 
     local function hide()
         if not hidden and valid(icon) then
             pcall(function() icon:SetVisibility(1) end)    -- collapsed
         end
         hidden = true
+        for _, one in pairs(pointers) do
+            hidePointer(one)
+        end
     end
 
     local function findMap()
@@ -101,6 +113,85 @@ return function(api)
         end
     end
 
+    -- A copy of your own marker for that player, on the open map's canvas.
+    local function pointerFor(slot, mine)
+        local one = pointers[slot]
+        if one and valid(one.widget) and one.owner == openMap:GetAddress() then
+            return one
+        end
+        if one and valid(one.widget) then
+            pcall(function() one.widget:RemoveFromParent() end)
+        end
+        local pc = FindFirstOf("PlayerController")
+        if not valid(pc) then
+            return nil
+        end
+        local widget = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary"):Create(pc, mine:GetClass(), pc)
+        local slotOnMap = mine:GetParent():AddChildToCanvas(widget)
+        slotOnMap:SetAutoSize(mine.Slot:GetAutoSize())
+        slotOnMap:SetSize(mine.Slot:GetSize())
+        slotOnMap:SetAlignment(mine.Slot:GetAlignment())
+        one = { widget = widget, owner = openMap:GetAddress(), hidden = true }
+        pointers[slot] = one
+        return one
+    end
+
+    local function updateParty()
+        local ms = FindFirstOf("MapSubsystem")
+        local mine = openMap.WB_PlayerIcon
+        if not (valid(ms) and valid(mine)) then
+            hide()
+            return
+        end
+        local mapId = ms:GetCurrentMapID()
+        local function project(x, y, z)
+            local uv = ms:ProjectWorldLocationToMap({ X = x, Y = y, Z = z }, mapId)
+            if not uv or (uv.X == 0 and uv.Y == 0) then
+                return nil
+            end
+            return uv.X, uv.Y
+        end
+        local _, me = api.getPlayer1()
+        if valid(me) then
+            local l = me:K2_GetActorLocation()
+            local ux, uy = project(l.X, l.Y, l.Z)
+            if ux then
+                local pos = mine.Slot:GetPosition()
+                scaleX, scaleY = pos.X / ux, pos.Y / uy
+            end
+        end
+        local drawn = {}
+        for _, p in ipairs(coop.partners()) do
+            local t = p.target
+            local fresh = t and p.lastRemoteAt and not p.partnerGone and os.clock() - p.lastRemoteAt <= FRESH_S
+            local px, py = nil, nil
+            if fresh and t.Map == net.localMap then
+                px, py = project(t.X, t.Y, t.Z)
+            end
+            local one = px and scaleX and pointerFor(p.number, mine)
+            if one then
+                drawn[p.number] = true
+                one.widget.Slot:SetPosition({ X = px * scaleX, Y = py * scaleY })
+                local yaw = math.rad(t.Yaw or 0)
+                local fx, fy = project(t.X + math.cos(yaw) * AHEAD_CM, t.Y + math.sin(yaw) * AHEAD_CM, t.Z)
+                if fx and (fx ~= px or fy ~= py) then
+                    one.widget:SetRenderTransformAngle(math.deg(math.atan(fx - px, py - fy)))
+                end
+                local down = t.MaxHp and t.MaxHp > 0 and t.Hp and t.Hp <= 0
+                one.widget:SetColorAndOpacity(down and DOWN_TINT or coop.players[p.number].tint)
+                if one.hidden then
+                    pcall(function() one.widget:SetVisibility(3) end)
+                    one.hidden = false
+                end
+            end
+        end
+        for slot, one in pairs(pointers) do
+            if not drawn[slot] then
+                hidePointer(one)
+            end
+        end
+    end
+
     coop.extraTicks.mapicon = function()
         if not mapicon.on then
             hide()
@@ -119,10 +210,17 @@ return function(api)
                 openMap = findMap()
                 if not openMap then
                     hidden = true   -- the icon closed with the map
+                    for _, one in pairs(pointers) do
+                        one.hidden = true
+                    end
                     return
                 end
             end
-            update()
+            if net.party then
+                updateParty()
+            else
+                update()
+            end
         end)
         if not ok and err ~= mapicon.lastError then
             mapicon.lastError = err

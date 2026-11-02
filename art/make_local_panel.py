@@ -64,8 +64,8 @@ def background():
     spaced(d, (40 * K, 96 * K), "PLAYERS", font(13), DIM, gap=3, anchor="lm")
     spaced(d, (480 * K, 96 * K), "SCREEN", font(13), DIM, gap=3, anchor="lm")
     spaced(d, (40 * K, 214 * K), "CONTROLS", font(13), DIM, gap=3, anchor="lm")
-    d.text((40 * K, 513 * K), "Hold any button on a joystick to light up its card. Drag cards onto players.",
-           font=font(13), fill=DIM, anchor="lm")
+    d.text((230 * K, 505 * K), "Hold any button on a joystick to light up its card.", font=font(13), fill=DIM, anchor="lm")
+    d.text((230 * K, 528 * K), "Drag cards onto players.", font=font(13), fill=DIM, anchor="lm")
     save(img, "bg")
 
 
@@ -139,11 +139,11 @@ def hold():
         save(img, "hold%d" % i)
 
 
-def button(name, text, red=False, face=font):
+def button(name, text, red=False, face=font, gap=3):
     w, h = 170, 46
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(150, 26, 22, 235) if red else (214, 217, 222, 235))
-    spaced(d, (w * K / 2, h * K / 2), text, face(16, True), BRIGHT if red else (10, 11, 13, 255), gap=3)
+    spaced(d, (w * K / 2, h * K / 2), text, face(16, True), BRIGHT if red else (10, 11, 13, 255), gap=gap)
     save(img, name)
 
 
@@ -182,4 +182,5 @@ if __name__ == "__main__":
     hold()
     button("apply", "APPLY")
     button("applied", "APPLIED", red=True)
+    button("multiplayer", "MULTIPLAYER", gap=1)
     print("panel art written to", os.path.normpath(OUT))

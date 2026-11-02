@@ -1290,6 +1290,401 @@ void test_hostile() {
     check(taker.field("received") == counted, "session 0 is nobody");
 }
 
+// A host with FourPlayers = On, in the same simulated network as End.
+struct Hosting {
+    Hosting(FakeNet& net, uint32_t ip, const std::string* secret = nullptr)
+        : addr(at(ip)), net_(net), party(L".", std::make_unique<FakeLink>(net, addr, std::nullopt, std::vector<relay::Addr>{}), secret, {}, "1.5.0",
+                                         [](const std::string&) {}, box) {}
+
+    void step() {
+        party.tick(net_.now);
+        if (reading) split_lines(box.take_events(relay::clock_ms()), events);
+    }
+
+    std::string field(const std::string& key) {
+        const std::string line = " " + party.status(net_.now) + " ", tag = " " + key + "=";
+        const size_t from = line.find(tag);
+        if (from == std::string::npos) return "";
+        const size_t start = from + tag.size();
+        return line.substr(start, line.find(' ', start) - start);
+    }
+
+    int count(const std::string& line) const { return static_cast<int>(std::count(events.begin(), events.end(), line)); }
+
+    relay::Mailbox box;
+    relay::Addr addr;
+    FakeNet& net_;
+    relay::Party party;
+    std::vector<std::string> events;
+    bool reading = true;
+};
+
+void run(FakeNet& net, Hosting& host, std::initializer_list<End*> ends, double seconds) {
+    for (double t = 0; t < seconds; t += 0.005) {
+        net.now += 0.005;
+        host.step();
+        for (End* e : ends) e->step();
+    }
+}
+
+// The same player seen from another PC: where they are, or nothing.
+bool sees(relay::Mailbox& box, int slot, relay::Sample& out) {
+    double silence = 0, delay = 0;
+    return box.player(slot, relay::clock_ms(), out, silence, delay);
+}
+
+relay::Sample at_x(float x) {
+    relay::Sample s;
+    s.ms = static_cast<uint32_t>(relay::clock_ms());
+    s.x = x;
+    s.hp = 100;
+    s.max_hp = 100;
+    return s;
+}
+
+int slot_of(End& guest) {
+    int players = 0, slot = 0;
+    guest.box.party(players, slot);
+    return slot;
+}
+
+void test_party() {
+    std::puts("four players:");
+    {
+        FakeNet net;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1)), b(net, "client", 3, at(1)), c(net, "client", 4, at(1));
+        run(net, host, {&a, &b, &c}, 0.5);
+        check(host.field("guests") == "3" && a.field("connected") == "yes" && c.field("connected") == "yes", "three guests on one host");
+        check(a.field("slot") == "2" && b.field("slot") == "3" && c.field("slot") == "4" && a.field("players") == "4", "each is told its own slot, in the order they came");
+        int players = 0, slot = 0;
+        check(host.box.party(players, slot) && players == 4 && slot == 1, "and the host's game knows it's a party");
+        check(host.count("@2 S") == 1 && host.count("@3 S") == 1 && host.count("@4 S") == 1 && host.count("S") == 0, "the host hears each one's start once, by slot");
+
+        host.box.post_sure("from host");
+        host.box.post_quick("quick host");
+        host.box.post_enemy("1 2 3");
+        host.box.post_sample(at_x(500));
+        host.box.post_map("Map_Xigu");
+        run(net, host, {&a, &b, &c}, 0.3);
+        relay::Sample out;
+        double silence, delay;
+        bool everyone = true;
+        for (End* g : {&a, &b, &c}) {
+            everyone = everyone && g->count("from host") == 1 && g->count("quick host") == 1 && !g->box.take_enemies().empty() &&
+                       g->box.partner(relay::clock_ms(), out, silence, delay) && out.x > 400 && g->field("partner_map") == "Map_Xigu";
+        }
+        check(everyone, "what the host does reaches all three: events, moves, enemies, position, map");
+
+        a.box.post_sample(at_x(1000));
+        b.box.post_sample(at_x(2000));
+        c.box.post_sample(at_x(3000));
+        run(net, host, {&a, &b, &c}, 0.3);
+        check(sees(host.box, 2, out) && out.x == 1000 && sees(host.box, 3, out) && out.x == 2000 && sees(host.box, 4, out) && out.x == 3000, "the host sees each guest in its own slot");
+        check(sees(a.box, 3, out) && out.x == 2000 && sees(a.box, 4, out) && out.x == 3000, "a guest sees the other two through the host");
+        check(sees(b.box, 2, out) && out.x == 1000 && sees(c.box, 3, out) && out.x == 2000, "and so do the others");
+        check(!sees(a.box, 2, out) && !sees(b.box, 3, out) && !sees(c.box, 4, out), "nobody gets their own position back");
+        check(a.box.partner(relay::clock_ms(), out, silence, delay) && out.x == 500, "a guest's partner stays the host");
+
+        a.box.post_sure("O chest1");
+        a.box.post_quick("U move 0");
+        run(net, host, {&a, &b, &c}, 0.3);
+        check(host.count("@2 O chest1") == 1 && b.count("@2 O chest1") == 1 && c.count("@2 O chest1") == 1, "a guest's event reaches everyone, with who sent it");
+        check(a.count("@2 O chest1") == 0 && a.count("O chest1") == 0, "but doesn't come back to the sender");
+        check(host.count("@2 U move 0") == 1 && b.count("@2 U move 0") == 1 && c.count("@2 U move 0") == 1, "the same for a move");
+
+        a.box.post_sure("D sp:boss 10.0 2.0 -");
+        a.box.post_sure("GK sp:far");
+        run(net, host, {&a, &b, &c}, 0.3);
+        check(host.count("@2 D sp:boss 10.0 2.0 -") == 1 && b.count("@2 D sp:boss 10.0 2.0 -") == 0 && c.count("@2 D sp:boss 10.0 2.0 -") == 0, "a hit goes to the host alone");
+        check(host.count("@2 GK sp:far") == 1 && b.count("@2 GK sp:far") == 1 && c.count("@2 GK sp:far") == 1, "a kill on a copy the host hasn't loaded reaches everyone");
+
+        host.box.post_to(3, "K only for b");
+        run(net, host, {&a, &b, &c}, 0.3);
+        check(b.count("K only for b") == 1 && a.count("K only for b") == 0 && c.count("K only for b") == 0, "the host can tell one guest alone");
+        host.box.post_to(7, "K nobody");
+        host.box.post_to(0, "K nobody");
+        run(net, host, {&a, &b, &c}, 0.1);
+        check(a.count("K nobody") + b.count("K nobody") + c.count("K nobody") == 0, "a slot that doesn't exist reaches nobody");
+
+        // A fifth player is turned away and nobody else notices.
+        End d(net, "client", 5, at(1));
+        run(net, host, {&a, &b, &c, &d}, 1.0);
+        check(d.field("connected") == "no" && host.field("turned_away") != "0", "a fourth guest gets no answer, and the host counts it");
+        check(host.field("guests") == "3" && slot_of(d) == 0, "and takes nobody's place");
+        a.box.post_sure("still fine");
+        run(net, host, {&a, &b, &c, &d}, 0.3);
+        check(b.count("@2 still fine") == 1 && d.count("@2 still fine") == 0, "the three go on");
+
+        // One goes quiet: the others are untouched, and the slot passes to the one who was waiting.
+        run(net, host, {&a, &c, &d}, relay::PEER_TIMEOUT + 0.5);
+        check(host.field("guests") == "3" && slot_of(d) == 3, "a guest gone silent frees its slot for the next");
+        check(host.count("@3 S") == 2, "the host's game hears of the new player in that slot");
+        a.box.post_sure("for the new one");
+        d.box.post_sure("from the new one");
+        run(net, host, {&a, &c, &d}, 0.3);
+        check(d.count("@2 for the new one") == 1 && a.count("@3 from the new one") == 1 && host.count("@3 from the new one") == 1, "and the lanes work with them");
+
+        // A guest restarts: only its own connection starts over.
+        const int events_a = a.count("@3 from the new one");
+        c.box.reset();
+        run(net, host, {&a, &c, &d}, 0.3);
+        check(host.count("@4 S") == 2, "a guest's restart is heard once");
+        check(a.field("connected") == "yes" && a.count("S") == 1 && d.count("S") == 1, "and doesn't restart anyone else");
+        check(a.count("@3 from the new one") == events_a, "or play anything twice");
+
+        // The host restarts: everyone hears it.
+        host.box.reset();
+        run(net, host, {&a, &c, &d}, 0.3);
+        check(a.count("S") == 2 && c.count("S") == 2 && d.count("S") == 2, "a host's restart reaches every guest");
+        host.box.post_sure("after the restart");
+        c.box.post_sure("guest after");
+        run(net, host, {&a, &c, &d}, 0.3);
+        check(a.count("after the restart") == 1 && d.count("after the restart") == 1 && a.count("@4 guest after") == 1, "and all the lanes work from 1 again");
+    }
+    {
+        // Each guest counts, not only the one who speaks for the connection.
+        FakeNet net;
+        Hosting host(net, 1);
+        const relay::Ini same{{"pvp", "off"}}, differs{{"pvp", "on"}, {"coopenemyhealth", "300"}};
+        End a(net, "client", 2, at(1), same), b(net, "client", 3, at(1), differs);
+        a.box.post_map("Map_A");
+        b.box.post_map("Map_B");
+        run(net, host, {&a, &b}, 0.3);
+        host.box.post_sample(at_x(1));
+        check(host.field("guests") == "2" && host.field("map2") == "Map_A" && host.field("map3") == "Map_B", "the host's status names each guest's map");
+        check(host.field("other_versions").empty(), "and says nothing of versions while they match");
+        for (int i = 0; i < 100; i++) {
+            host.box.post_sample(at_x(1));
+            run(net, host, {&a, &b}, 0.02);
+        }
+        check(host.field("upload_kb_s").find_first_not_of("0123456789") == std::string::npos, "and what it sends a second");
+        FakeNet other;
+        Hosting mixed(other, 1);
+        const relay::Ini host_ini{{"pvp", "off"}};
+        End first(other, "client", 2, at(1));
+        relay::Mailbox box;
+        // A guest on another version of the mod, whichever slot it lands in.
+        auto oddLink = std::make_unique<FakeLink>(other, at(3), at(1), std::vector<relay::Addr>{});
+        relay::Relay odd("client", L".", std::move(oddLink), nullptr, {}, "1.4.1b", [](const std::string&) {}, box);
+        for (int i = 0; i < 100; i++) {
+            other.now += 0.005;
+            mixed.step();
+            first.step();
+            odd.tick(other.now);
+        }
+        check(mixed.field("other_versions") == "3:1.4.1b", "a guest on another version is named, though another guest speaks for the connection");
+    }
+    {
+        // A setting that differs on one guest shows on the host, whoever speaks for the connection.
+        FakeNet net;
+        relay::Mailbox box;
+        relay::Party party(L".", std::make_unique<FakeLink>(net, at(1), std::nullopt, std::vector<relay::Addr>{}), nullptr, {{"pvp", "off"}}, "1.5.0", [](const std::string&) {}, box);
+        End a(net, "client", 2, at(1), {{"pvp", "off"}}), b(net, "client", 3, at(1), {{"pvp", "on"}});
+        for (int i = 0; i < 100; i++) {
+            net.now += 0.005;
+            party.tick(net.now);
+            a.step();
+            b.step();
+        }
+        const std::string line = party.status(net.now);
+        check(line.find(" mismatch=pvp ") != std::string::npos, "a setting that differs on the second guest is reported");
+    }
+    {
+        // Every lane between every pair at once, through a bad connection.
+        FakeNet net;
+        net.delay = 0.02;
+        net.jitter = 0.02;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1)), b(net, "client", 3, at(1)), c(net, "client", 4, at(1));
+        run(net, host, {&a, &b, &c}, 0.5);
+        net.loss = 0.3;
+        const int total = 300;
+        double took = 0;
+        for (int i = 0; i < total; i++) {
+            host.box.post_sure("h" + std::to_string(i) + " x");
+            a.box.post_sure("a" + std::to_string(i) + " x");
+            b.box.post_sure("b" + std::to_string(i) + " x");
+            c.box.post_sure("c" + std::to_string(i) + " x");
+            if (i % 10 == 0) run(net, host, {&a, &b, &c}, 0.01);
+        }
+        const auto strip = [](const std::vector<std::string>& lines, const std::string& tag) {
+            std::vector<std::string> out;
+            for (const std::string& line : lines)
+                if (line.rfind(tag, 0) == 0) out.push_back(line.substr(tag.size()));
+            return out;
+        };
+        // (They started together on a jittery link, so which of them came first is the network's choice.)
+        const std::string from_a = "@" + std::to_string(slot_of(a)) + " ", from_b = "@" + std::to_string(slot_of(b)) + " ", from_c = "@" + std::to_string(slot_of(c)) + " ";
+        check(from_a != from_b && from_b != from_c && from_a != from_c && slot_of(a) && slot_of(b) && slot_of(c), "three at once through a jittery link get a slot each");
+        const auto done = [&] {
+            return in_order(a.events, "h", total) && in_order(b.events, "h", total) && in_order(c.events, "h", total) &&
+                   in_order(strip(host.events, from_a), "a", total) && in_order(strip(host.events, from_b), "b", total) && in_order(strip(host.events, from_c), "c", total) &&
+                   in_order(strip(b.events, from_a), "a", total) && in_order(strip(c.events, from_a), "a", total) &&
+                   in_order(strip(a.events, from_b), "b", total) && in_order(strip(c.events, from_b), "b", total) &&
+                   in_order(strip(a.events, from_c), "c", total) && in_order(strip(b.events, from_c), "c", total);
+        };
+        while (took < 30 && !done()) {
+            run(net, host, {&a, &b, &c}, 0.1);
+            took += 0.1;
+        }
+        check(done(), "everyone to everyone at 30% loss: all there, in order, once each, in " + std::to_string(took).substr(0, 4) + " s");
+    }
+    {
+        // Back-pressure runs through the host: with its game stuck in a load, a guest's events wait unconfirmed.
+        FakeNet net;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1)), b(net, "client", 3, at(1));
+        run(net, host, {&a, &b}, 0.3);
+        host.reading = false;
+        const int total = 2000;
+        for (int i = 0; i < total; i++) a.box.post_sure(padded("a", i, relay::MAX_TEXT));
+        run(net, host, {&a, &b}, 5);
+        check(a.field("pending") != "0", "a host's inbox that's full isn't acknowledged");
+        host.reading = true;
+        double took = 0;
+        std::vector<std::string> plain;
+        const auto got = [&] {
+            plain.clear();
+            for (const std::string& line : host.events)
+                if (line.rfind("@2 a", 0) == 0) plain.push_back(line.substr(3));
+            return in_order(plain, "a", total);
+        };
+        while (took < 10 && !got()) {
+            run(net, host, {&a, &b}, 0.1);
+            took += 0.1;
+        }
+        check(got(), "and everything arrives, once, when its game reads again");
+        run(net, host, {&a, &b}, 1);
+        plain.clear();
+        for (const std::string& line : b.events)
+            if (line.rfind("@2 a", 0) == 0) plain.push_back(line.substr(3));
+        check(in_order(plain, "a", total), "and reaches the other guest once too");
+    }
+    {
+        // What a guest may and may not say.
+        FakeNet net;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1)), b(net, "client", 3, at(1));
+        run(net, host, {&a, &b}, 0.3);
+        a.box.post_sure("@3 C 999999");
+        run(net, host, {&a, &b}, 0.3);
+        check(host.count("@2 @3 C 999999") == 1 && b.count("@2 @3 C 999999") == 1 && host.count("@3 C 999999") == 0, "a guest can't speak for another: the tag in front is the host's");
+        a.box.post_sure("C 1\n@3 C 999999");
+        a.box.post_sure("C 2\rK sp:boss");
+        a.box.post_quick("U x 0\nK sp:boss");
+        a.box.post_sure("after the forgery");
+        run(net, host, {&a, &b}, 0.3);
+        check(host.count("@3 C 999999") == 0 && b.count("@3 C 999999") == 0 && host.count("K sp:boss") == 0 && b.count("K sp:boss") == 0, "nor with a line break in an event, to anyone");
+        check(host.count("@2 after the forgery") == 1 && b.count("@2 after the forgery") == 1, "and its lane goes on behind it");
+
+        relay::Sample s = at_x(7777);
+        std::string rest;
+        relay::Writer w(rest);
+        w.put<uint8_t>(relay::SEC_PLAYER);
+        w.put<uint8_t>(3);
+        relay::put_sample(w, s);
+        RawHeader forged;       // a first packet from a new sender, so every section of it is read
+        FakeNet other;
+        Hosting empty(other, 1);
+        empty.party.on_packet(at(9), raw_packet(forged, rest), other.now);
+        relay::Sample out;
+        check(empty.field("peer") == "pc9" && !sees(empty.box, 3, out), "a host takes no other player's position from a guest");
+
+        const std::string secret = "correct horse battery", wrong = "something else";
+        FakeNet signed_net;
+        Hosting strict(signed_net, 1, &secret);
+        End good(signed_net, "client", 2, at(1), {}, &secret), bad(signed_net, "client", 3, at(1), {}, &wrong);
+        run(signed_net, strict, {&good, &bad}, 1.0);
+        check(strict.field("guests") == "1" && good.field("connected") == "yes" && good.field("slot") == "2", "with a Secret the right guest gets in");
+        check(bad.field("connected") == "no" && strict.field("rejected") != "0", "and the wrong one takes no slot");
+    }
+    {
+        FakeNet net;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1)), b(net, "client", 3, at(1)), c(net, "client", 4, at(1));
+        run(net, host, {&a, &b, &c}, 0.3);
+        for (int i = 0; i < 400; i++) {
+            host.box.post_sample(at_x(1));
+            a.box.post_sample(at_x(2));
+            b.box.post_sample(at_x(3));
+            c.box.post_sample(at_x(4));
+            host.box.post_sure(padded("h", i, relay::MAX_TEXT));
+            a.box.post_quick(std::string(relay::MAX_TEXT, 'q'));
+            host.box.post_enemy(std::string(relay::MAX_TEXT, 'e'));
+            run(net, host, {&a, &b, &c}, 0.017);
+        }
+        check(net.biggest <= relay::MAX_PACKET, "no packet over the limit with everything at once (" + std::to_string(net.biggest) + " bytes)");
+        check(in_order(a.events, "h", 400) && in_order(c.events, "h", 400), "and the sure lane keeps up");
+    }
+    {
+        // The other half of "players=": a guest whose host says nothing is back to two players.
+        FakeNet net;
+        End guest(net, "client", 2, at(1));
+        {
+            Hosting party(net, 1);
+            run(net, party, {&guest}, 0.3);
+            check(slot_of(guest) == 2, "a guest in a party knows it");
+        }
+        net.wires.clear();
+        run(net, {&guest}, 4);
+        End plain(net, "host", 1);
+        run(net, {&plain, &guest}, relay::HELLO_EVERY + 0.3);
+        check(slot_of(guest) == 0 && guest.field("players").empty(), "and a host with two players takes it back");
+    }
+    {
+        // With two players the status line says nothing of any of this.
+        FakeNet net;
+        End host(net, "host", 1), guest(net, "client", 2, at(1));
+        run(net, {&host, &guest}, 0.3);
+        int players = 0, slot = 0;
+        check(!host.box.party(players, slot) && !guest.box.party(players, slot), "a plain host and guest aren't a party");
+        check(host.field("players").empty() && guest.field("players").empty() && guest.field("slot").empty(), "and their status lines don't change");
+    }
+    {
+        // Packets cut at every byte, and noise, at a guest that's listening for other players.
+        EdgeOfMemory edge;
+        FakeNet net;
+        Hosting host(net, 1);
+        End a(net, "client", 2, at(1));
+        run(net, host, {&a}, 0.3);
+        RawHeader h;
+        h.flags = relay::FLAG_FROM_HOST;
+        h.session = static_cast<uint32_t>(static_cast<uint64_t>(relay::wall_seconds() * 1000)) + 0x10000000u;    // newer: it gets read
+        relay::Sample s = at_x(5);
+        std::string rest;
+        relay::Writer w(rest);
+        for (int slot = 0; slot < 8; slot++) {
+            w.put<uint8_t>(relay::SEC_PLAYER);
+            w.put<uint8_t>(static_cast<uint8_t>(slot));
+            relay::put_sample(w, s);
+        }
+        w.put<uint8_t>(relay::SEC_HELLO);
+        w.text("1.5.0\nMap\nplayers=4\nslot=2\nplayers=99999999999999999999\nslot=-1\n");
+        const std::string whole = raw_packet(h, rest);
+        for (size_t n = 0; n <= whole.size(); n++) a.relay->handle(host.addr, edge.place(std::string_view(whole).substr(0, n)), net.now);
+        check(true, "a party's sections cut at each of " + std::to_string(whole.size()) + " bytes: no crash, no read past the end");
+        std::mt19937 rng(20261102);
+        bool finite = true;
+        relay::Sample out;
+        for (int i = 0; i < 500000; i++) {
+            std::string p = whole;
+            for (uint32_t n = 1 + rng() % 8; n > 0; n--) p[31 + rng() % (p.size() - 31)] = static_cast<char>(rng() & 255);
+            p.resize(31 + rng() % (p.size() - 30));
+            a.relay->handle(host.addr, edge.place(p), net.now);
+            p[2] = 0;               // the same from a guest
+            host.party.on_packet(a.addr, p, net.now);
+            if (i % 512 == 0) {
+                for (int slot = 0; slot < 8; slot++)
+                    if (sees(a.box, slot, out)) finite = finite && std::isfinite(out.x) && std::isfinite(out.hp);
+                a.box.take_events(relay::clock_ms());
+                host.box.take_events(relay::clock_ms());
+            }
+        }
+        check(finite, "500000 damaged party packets, both ways: no crash, and nothing that isn't a number reached the game");
+    }
+}
+
 // Over real UDP sockets on this PC: two relays with threads of their own, as in the game, through a real bad connection.
 void sure_over_sockets(int port, double loss_pct, int total, size_t bytes) {
     relay::Mailbox host_box, guest_box;
@@ -1383,6 +1778,7 @@ int run_tests(int argc, wchar_t** argv) {
     test_restarts();
     test_silence();
     test_hostile();
+    test_party();
     if (opt_number(argc, argv, L"--sockets", 1) != 0) {
         try {
             test_sockets(static_cast<int>(opt_number(argc, argv, L"--port", 47960)));
@@ -1420,9 +1816,11 @@ int run_bot(int argc, wchar_t** argv) {
     std::thread net([&] { relay::run(o, [](const std::string& line) { if (line.rfind("role=", 0) != 0) std::puts(line.c_str()); }); });
     timeBeginPeriod(1);
 
-    Stats ghost_late, quick_late, sure_late, step_error, enemy_late;
+    Stats ghost_late, quick_late, sure_late, step_error, enemy_late, player_late, passed_late;
     long long quick_got = 0, sure_got = 0, quick_sent = 0, sure_sent = 0;
     long long sure_expected = 0, sure_wrong = 0, restarts = 0;
+    std::map<int, long long> expected_from, got_from;      // a party: by slot, what came from each other player
+    long long passed_wrong = 0;
     const auto post_sure = [&](double now) {
         char head[64];
         std::snprintf(head, sizeof head, "E %lld %.6f ", ++sure_sent, now);
@@ -1485,12 +1883,29 @@ int run_bot(int argc, wchar_t** argv) {
             last_angle = angle_seen;
             last_frame = now;
         }
+        for (int slot = relay::FIRST_GUEST_SLOT; slot <= relay::MAX_SLOT; slot++) {
+            if (!relay::mail.player(slot, relay::clock_ms(), p, silence, delay)) continue;
+            double angle_seen = std::atan2(p.y - center_y, p.x - center_x);
+            angle_seen += std::round((now * TURN_RATE - angle_seen) / (2 * PI)) * 2 * PI;
+            if (silence < 500) player_late.add((now - angle_seen / TURN_RATE) * 1000);
+        }
         std::string events = relay::mail.take_events(relay::clock_ms());
         for (size_t at = 0; at < events.size();) {
             size_t end = events.find('\n', at);
             std::string line = events.substr(at, end - at);
             at = end + 1;
-            if (line.size() > 2 && line[0] == 'Q') {
+            if (line.size() > 3 && line[0] == '@') {
+                const int from = line[1] - '0';
+                line.erase(0, 3);
+                if (line.size() > 2 && line[0] == 'E') {
+                    char* rest = nullptr;
+                    const long long number = std::strtoll(line.c_str() + 2, &rest, 10);
+                    passed_late.add((monotonic() - std::atof(rest)) * 1000);
+                    got_from[from]++;
+                    if (expected_from[from] && number != expected_from[from]) passed_wrong++;
+                    expected_from[from] = number + 1;
+                }
+            } else if (line.size() > 2 && line[0] == 'Q') {
                 quick_late.add((monotonic() - std::atof(line.c_str() + 2)) * 1000);
                 quick_got++;
             } else if (line.size() > 2 && line[0] == 'E') {
@@ -1533,6 +1948,13 @@ int run_bot(int argc, wchar_t** argv) {
     if (enemies) enemy_late.print("enemy line (ms)");
     std::printf("quick arrived %lld of the partner's sent; sure %lld; this side sent %lld quick, %lld sure\n", quick_got, sure_got, quick_sent, sure_sent);
     std::printf("sure_lane got=%lld wrong_order=%lld restarts=%lld sent=%lld\n", sure_got, sure_wrong, restarts, sure_sent);
+    if (!player_late.v.empty()) {
+        player_late.print("other players (ms)");
+        passed_late.print("others' sure events (ms)");
+        std::printf("passed_on");
+        for (const auto& [slot, n] : got_from) std::printf(" from%d=%lld", slot, n);
+        std::printf(" wrong_order=%lld\n", passed_wrong);
+    }
     return 0;
 }
 

@@ -17,7 +17,7 @@ Host = the player whose world is shared (Role = Host). Client = the guest.
 | Moves (attacks, dodges, guard) | **That player** | own PC | quick `U <montage>` when a move starts (in PvP, `M <ability>`) | the ghost replays it for the animation; the ghost has Attack 0 in co-op, and in PvP its hits on enemies are undone (below) |
 | Enemy position, health, posture | **Host** | host simulates; client mirrors | enemy lines from the host, for enemies within 60 m of the host, or of a client up to 120 m from it. Further off the game keeps them asleep on the host, so those are the client's own (their AI, their health), and a kill reaches the host as `GK` | the client only ever lowers its copy to the host's numbers (or follows a heal the host keeps for 1 s) |
 | Who an enemy goes for | **Host** | host | seen through its moves | the game picks the nearest player every 1.5 s, which flips all the time with two: near both, an enemy now holds a target for 15 s, then turns if the other player hit it (`game.steerFocus`) |
-| Enemy AI (which attack it throws) | **Host** | host; the client replays it | quick `A <enemy> <ability> <montage> <position> <host, guest or ->`, the last being who it's aimed at | a copy the host lists has its own AI stopped, and stopped again every 0.1 s, since the game restarts it by itself. An ability replays for real, so its hits land on the guest and guard, parry and dodge work as usual. Enemies the host hasn't loaded keep their own AI on the guest's PC |
+| Enemy AI (which attack it throws) | **Host** | host; the client replays it | quick `A <enemy> <ability> <montage> <position> <host, guest or ->`, the last being who it's aimed at (a slot or -, with more than two players) | a copy the host lists has its own AI stopped, and stopped again every 0.1 s, since the game restarts it by itself. An ability replays for real, so its hits land on the guest and guard, parry and dodge work as usual. Enemies the host hasn't loaded keep their own AI on the guest's PC |
 | Client hits on enemies | **Client detects, host applies** | client measures its copy's drop, host applies it | sure lane: `D <enemy> <hp> <posture>` | event ids are acknowledged and played once; in co-op lost health is always the client's own hit, and a posture drop alone that follows the ghost's replay is undone, not reported; in PvP any such drop is undone |
 | Enemy death | **Host** | host | sure lane: `K <enemy>` | the client's copies of host enemies are held at 1 health (Health_Min) so they can't die on their own; a client hit that reaches that floor is sent as lethal (`D ... L`) and the host kills; only `K` kills the copy, once, even if it loads later. An enemy that dies on the client before the host has it loaded is reported with `GK` |
 | Enemy spawning | each world's own level | both | not synced (both load the same level) | the mod never spawns enemies; matching pairs the two copies (spawner id, else class + position) |
@@ -90,6 +90,40 @@ online panel doesn't pause, and a pause by the game (its menu) is undone at once
 - **Your partner vanishes** (quits, crashes, loses the connection): after 12 s with nothing heard (longer than a loading screen), their ghost
   hides instead of standing frozen. Fog walls closed for their fight open, and the enemies held for the host go
   back to normal.
+
+## More than two players (beta)
+
+`FourPlayers = On` on the host, or 4 PLAYERS under MORE in the panel. Only the host's setting counts: its relay tells each guest
+in the hello (`players=4`, `slot=<n>`), and a guest follows that, whatever its own ini says. With it off the code below never
+starts, and two players' packets and game calls are the same as without it (`tools/netlab/wirecheck.ps1`, `luasim.py two`).
+
+A slot says who's who: 1 is the host, 2 to 4 the guests in the order they came. The colours go with the slots, the same on every
+PC: purple, green, gold, blue. Red still means down.
+
+It's a star: a guest only talks to the host. The host runs a whole relay for each guest (`native/party.hpp`), so each has its
+own session and lanes, as with two players. What a guest sends reaches the host's game and the other guests as
+`@<slot> <event>`. Only the host's relay writes that tag, so a guest can't speak for another. Where a guest is goes on from the
+relay thread, so a host stuck in a load doesn't stop it. `D` goes to the host alone. `S` from a guest stays with the host, which
+tells that guest what's dead (`K`, for it alone) and everyone that someone's new (`J`): they tell it what they hold and any fight.
+
+| What | With more than two |
+|---|---|
+| Enemies | The host runs them, as ever: those near it, and near any guest up to 120 m from it |
+| An enemy past that | Nobody owns it. It sleeps on the host, so a guest there fights a copy of its own, as a guest alone does, and two guests by it fight one each: their hits stay on their own copy. A second authority on a guest would be a second way to be wrong. The first kill counts: `GK` reaches everyone and their copies die. Only for an enemy that player hit, since a copy can read as dead for other reasons |
+| Who an enemy goes for | It holds one player for 15 s, however many hit it, then turns to whoever hit it last of the others near it. That's once in 15 s at most. To turn, everyone else leaves its list for that moment |
+| Who it's aimed at | The slot, in `A`. The guest it's after aims its copy at itself, the others at that guest's ghost |
+| Hatred | Each ghost goes on an enemy's list on its own account. A hidden one comes off every list and can't go back on, and the others stay |
+| Dying in a boss fight | You wait while a partner who's up and here has a boss bar, so until the boss dies or everyone else is down. The camera moves on if the one you watch goes down |
+| Joining during a fight | Anyone's `F` counts, and the fight may not be the host's. A joiner gives it 2.5 s to be heard of, and everyone tells again on `J`. You watch whoever's in it, and go to the host when it's over |
+| What anyone gets | `T`, `O`, `C`, `I` and bells reach everyone, once. The same thing from two senders within 15 s is one thing here too. Two from one sender are two. A guest's death stays its own: only the host's `R death` goes out |
+| Enemy health | Each person connected adds what the first did, wherever they are: 150/130 with one, 200/160 with two, 250/190 with three. It only goes up, on the host, where guests' copies follow: a boss mustn't lose health because a player left, and a copy that lost health would look like a hit. Someone who joins during a boss fight only watches, so that boss keeps its number until the fight is over. New enemies get the number of the moment |
+| F3 | The nearest partner who's up. With nobody on your map a guest goes to the host, and a host to its first guest who's up: those are the maps the relay can name |
+| Someone leaves | A guest: their ghost hides on every PC, the others play on, and walls closed for a fight they started open, whoever else shows its bar, as those bars are copies of the same fight. The host: it's over for everyone, as nothing passes between guests but through it |
+| PvP, Revive | Off. Each has one ghost to fight or one partner to bring you back |
+
+Known limits: positions between two guests go through the host, so they take two trips. Settings and versions are compared with
+the host: a host's status names each guest on another version, and a guest's shows only its own difference with the host. A
+guest can only go by F3 to another map if it's the host's, since that's the only map name it's told.
 
 ## What can't be checked in the prologue
 
@@ -173,3 +207,5 @@ Raised by appdoze (issue #1 / PR #2) and reworked from their code:
   route, so a partner can see this PC's IP. It's off by default for that reason. Only friends get a session.
 - Over Steam, the relay's session handling runs on code the tests can't reach, since it needs a running game.
 - Protocol 3 has only run on one PC so far ([NETCODE.md](NETCODE.md)), not between two real PCs.
+- More than two players has never run with more than two game copies: only with bots and with the mod's scripts on a stand-in
+  for the game ([tools/netlab/README.md](../tools/netlab/README.md)).

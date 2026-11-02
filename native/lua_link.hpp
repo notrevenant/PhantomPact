@@ -163,6 +163,50 @@ extern "C" __declspec(dllexport) int pp_partner(void* lua) {
     return 13;
 }
 
+// With more than two players (party.hpp). pp_party(): how many at most, and this player's slot; nothing with two.
+extern "C" __declspec(dllexport) int pp_party(void* lua) {
+    using namespace lua_link;
+    const Api* a = api();
+    if (!a) return 0;
+    int players = 0, slot = 0;
+    if (!relay::mail.party(players, slot)) return 0;
+    const State s{lua};
+    a->set_number(&s, players);
+    a->set_number(&s, slot);
+    return 2;
+}
+
+// pp_player(slot): as pp_partner, for the player in that slot.
+extern "C" __declspec(dllexport) int pp_player(void* lua) {
+    using namespace lua_link;
+    const Api* a = api();
+    if (!a) return 0;
+    const State s{lua};
+    if (a->top(&s) < 1) return 0;
+    const int slot = static_cast<int>(a->get_number(&s, 1));
+    relay::Sample p;
+    double silence = 0, delay = 0;
+    if (!relay::mail.player(slot, relay::clock_ms(), p, silence, delay)) return 0;
+    for (double v : {static_cast<double>(p.x), static_cast<double>(p.y), static_cast<double>(p.z), static_cast<double>(p.yaw),
+                     static_cast<double>(p.vx), static_cast<double>(p.vy), static_cast<double>(p.vz), static_cast<double>(p.hp),
+                     static_cast<double>(p.max_hp), static_cast<double>(p.map), static_cast<double>(p.flags), silence, delay})
+        a->set_number(&s, v);
+    return 13;
+}
+
+// pp_send_to(slot, text): a sure event for that guest alone.
+extern "C" __declspec(dllexport) int pp_send_to(void* lua) {
+    using namespace lua_link;
+    const Api* a = api();
+    if (!a) return 0;
+    const State s{lua};
+    if (a->top(&s) < 2) return 0;
+    const int slot = static_cast<int>(a->get_number(&s, 1));
+    std::string text;
+    if (text_arg(a, s, text)) relay::mail.post_to(slot, std::move(text));
+    return 0;
+}
+
 // One line per event since the last call, or nothing.
 extern "C" __declspec(dllexport) int pp_events(void* lua) {
     using namespace lua_link;

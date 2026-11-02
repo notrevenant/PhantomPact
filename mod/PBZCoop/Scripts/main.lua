@@ -467,7 +467,7 @@ local function openLink()
         end
         link[name] = fn
     end
-    for _, name in ipairs({ "layout", "read", "pointer", "paste" }) do      -- only ever faster: without them, reads go through UE4SS
+    for _, name in ipairs({ "layout", "read", "pointer", "paste", "party", "player", "send_to" }) do      -- only ever faster: without them, reads go through UE4SS
         link[name] = package.loadlib(dll, "pp_" .. name)
     end
     if not link.now() then
@@ -511,6 +511,7 @@ api.mapicon = dofile(SCRIPT_DIR .. "mapicon.lua")(api)
 api.revive = dofile(SCRIPT_DIR .. "revive.lua")(api)
 api.pvp = dofile(SCRIPT_DIR .. "pvp.lua")(api)
 api.scaling = dofile(SCRIPT_DIR .. "scaling.lua")(api)
+api.units = dofile(SCRIPT_DIR .. "units.lua")(api)
 api.localcoop = dofile(SCRIPT_DIR .. "localcoop.lua")(api)
 api.panel = dofile(SCRIPT_DIR .. "panel.lua")(api)
 api.onlinepanel = dofile(SCRIPT_DIR .. "onlinepanel.lua")(api)
@@ -570,6 +571,7 @@ COMMANDS.moves = api.moves.command
 COMMANDS.puppets = api.puppets.command
 COMMANDS.hud = api.hud.command
 COMMANDS.revive = api.revive.command
+COMMANDS.units = api.units.command
 COMMANDS.localcoop = api.localcoop.command
 COMMANDS.panel = api.panel.command
 COMMANDS.onlinepanel = api.onlinepanel.command

@@ -5,6 +5,7 @@
 // Protocol 3, one packet (all little-endian):
 //   header   marker, protocol, flags, session, partner's session, sequence, time, echoed time, hold, acknowledgement
 //   sections state (the player, newest wins) | sure and quick events (lanes.hpp) | enemy lines | hello
+//            | another player, passed on by the host (only with more than two: party.hpp)
 // A packet goes out the moment the game has something new, carrying whatever else is waiting, so an acknowledgement or
 // an event never needs a packet of its own while the game is running.
 #pragma once
@@ -17,6 +18,7 @@
 #include <timeapi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -59,6 +61,8 @@ constexpr size_t MAX_ENEMY_LINES = 128;    // waiting to go: the oldest are out 
 constexpr size_t MAX_INBOX_BYTES = 1 << 20;
 constexpr size_t MAX_QUICK_WAITING = 256;
 constexpr int MAX_PACKETS_PER_RECEIVE = 256;
+constexpr int HOST_SLOT = 1, FIRST_GUEST_SLOT = 2, MAX_SLOT = 4;   // who's who with more than two players (party.hpp)
+constexpr double PLAYERS_EVERY = 1.0 / 60;  // where the others are goes to a guest this often at most: it mostly rides along
 
 inline std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
@@ -463,6 +467,7 @@ public:
         Sample sample;
         std::string map;
         std::vector<std::string> sure, quick, enemies;
+        std::vector<std::pair<int, std::string>> direct;    // a party: slot, a sure event for that guest alone
     };
 
     // Game thread.
@@ -505,6 +510,7 @@ public:
             quick_.clear();
             enemies_.clear();
             timeline_.clear();
+            for (Timeline& line : players_) line.clear();
         }
         SetEvent(wake);
     }
@@ -577,11 +583,16 @@ public:
         enemies_.push_back('\n');
     }
 
-    // S always gets in, past the limit too: it's how the game learns that the partner has to be told everything again.
-    void on_partner_restart() {
+    void forget_partner() {
         Lock hold(lock_);
         timeline_.clear();
         enemies_.clear();
+    }
+
+    // S always gets in, past the limit too: it's how the game learns that the partner has to be told everything again.
+    void on_partner_restart() {
+        forget_partner();
+        Lock hold(lock_);
         events_ += "S\n";
     }
 
@@ -594,6 +605,72 @@ public:
         Lock hold(lock_);
         jitter_ms = timeline_.jitter_ms();
         delay_ms = timeline_.delay_ms();
+    }
+
+    // A party (party.hpp). With two players none of this is used.
+
+    // Game thread.
+
+    void post_to(int slot, std::string text) {
+        {
+            Lock hold(lock_);
+            if (out_.direct.size() < MAX_SURE_PENDING) out_.direct.emplace_back(slot, std::move(text));
+        }
+        SetEvent(wake);
+    }
+
+    bool player(int slot, double now_ms, Sample& out, double& silence_ms, double& delay_ms) {
+        if (slot < FIRST_GUEST_SLOT || slot > MAX_SLOT) return false;
+        Lock hold(lock_);
+        Timeline& line = players_[slot - FIRST_GUEST_SLOT];
+        silence_ms = line.silence_ms(now_ms);
+        delay_ms = line.delay_ms();
+        return line.at(now_ms, out);
+    }
+
+    bool party(int& players, int& slot) {
+        Lock hold(lock_);
+        players = party_players_;
+        slot = party_slot_;
+        return players != 0;
+    }
+
+    // Relay thread.
+
+    void set_party(int players, int slot) {
+        Lock hold(lock_);
+        party_players_ = players;
+        party_slot_ = slot;
+    }
+
+    void on_player(int slot, const Sample& s, double arrived_ms) {
+        Lock hold(lock_);
+        players_[slot - FIRST_GUEST_SLOT].push(s, arrived_ms);
+    }
+
+    void on_player_restart(int slot) {
+        Lock hold(lock_);
+        players_[slot - FIRST_GUEST_SLOT].clear();
+        events_ += "@" + std::to_string(slot) + " S\n";
+    }
+
+    // What the host's game posted, into one guest's box. An empty slot takes no events: whoever comes starts on a new
+    // session, which drops them (SureSender::forget).
+    void absorb(const Outgoing& in, bool lanes) {
+        if (in.reset) reset();
+        Lock hold(lock_);
+        if (in.have_sample) {
+            out_.sample = in.sample;
+            out_.have_sample = true;
+        }
+        if (in.map_changed) {
+            out_.map = in.map;
+            out_.map_changed = true;
+        }
+        if (!lanes) return;
+        for (const std::string& text : in.sure) keep(out_.sure, text);
+        for (const std::string& text : in.quick) keep(out_.quick, text);
+        for (const std::string& text : in.enemies) keep(out_.enemies, text);
     }
 
     // The player left (pp_stop): run() ends. Cleared just before a start file is read, so a Leave after that still counts.
@@ -639,6 +716,8 @@ private:
     Timeline timeline_;
     std::string events_, enemies_, status_;
     std::deque<Waiting> quick_;
+    std::array<Timeline, MAX_SLOT - HOST_SLOT> players_;    // a party: slots 2 to 4
+    int party_players_ = 0, party_slot_ = 0;
 };
 
 inline Mailbox mail;
@@ -689,7 +768,7 @@ private:
     std::string_view data_;
 };
 
-enum Section : uint8_t { SEC_STATE = 1, SEC_SURE = 2, SEC_QUICK = 3, SEC_ENEMY = 4, SEC_HELLO = 5 };
+enum Section : uint8_t { SEC_STATE = 1, SEC_SURE = 2, SEC_QUICK = 3, SEC_ENEMY = 4, SEC_HELLO = 5, SEC_PLAYER = 6 };
 constexpr uint8_t FLAG_FROM_HOST = 1;
 
 inline void put_sample(Writer& w, const Sample& s) {
@@ -736,6 +815,16 @@ inline uint32_t next_session(uint32_t last, uint64_t wall_ms) {
     if (last != 0 && static_cast<int32_t>(stamped - last) <= 0) stamped = last + 1;
     return stamped ? stamped : 1;
 }
+
+// A host with several guests runs a Relay for each (party.hpp): what a guest says goes here, not into that Relay's Mailbox.
+class Hub {
+public:
+    virtual ~Hub() = default;
+    virtual void on_sample(int slot, const Sample& s, double arrived_ms) = 0;
+    virtual bool on_sure(int slot, const std::string& text) = 0;      // false: no room, as Mailbox::on_event
+    virtual void on_quick(int slot, std::string_view text, double arrived_ms) = 0;
+    virtual void on_restart(int slot) = 0;
+};
 
 class Relay {
 public:
@@ -862,15 +951,17 @@ public:
             const auto section = r.get<uint8_t>();
             if (section == SEC_STATE) {
                 Sample s = get_sample(r);
-                if (r.ok && sane(s.x) && sane(s.y) && sane(s.z) && sane(s.yaw) && sane(s.hp) && sane(s.max_hp))
+                if (r.ok && sane(s.x) && sane(s.y) && sane(s.z) && sane(s.yaw) && sane(s.hp) && sane(s.max_hp)) {
                     box_.on_sample(s, ms);
+                    if (hub_) hub_->on_sample(my_slot_, s, ms);
+                }
             } else if (section == SEC_SURE) {
                 const auto id = r.get<uint32_t>();
                 std::string_view text = r.text();
                 if (!r.ok || text.size() > MAX_TEXT) return;
                 if (synced) {
                     if (ack_wanted_at_ < 0) ack_wanted_at_ = now;
-                    sure_in_.on_event(id, std::string(text), [this](const std::string& t) { return box_.on_event(t); });
+                    sure_in_.on_event(id, std::string(text), [this](const std::string& t) { return hub_ ? hub_->on_sure(my_slot_, t) : box_.on_event(t); });
                 }
             } else if (section == SEC_QUICK) {
                 const auto id = r.get<uint32_t>();
@@ -878,7 +969,10 @@ public:
                 std::string_view text = r.text();
                 if (!r.ok || text.size() > MAX_TEXT) return;
                 const double trip = rtt_ms_ < 0 ? 0 : rtt_ms_ / 2;
-                if (synced && quick_in_.fresh(id) && age + trip <= QUICK_REPLAY_MS) box_.on_quick(text, ms);
+                if (synced && quick_in_.fresh(id) && age + trip <= QUICK_REPLAY_MS) {
+                    if (hub_) hub_->on_quick(my_slot_, text, ms);
+                    else box_.on_quick(text, ms);
+                }
             } else if (section == SEC_ENEMY) {
                 std::string_view text = r.text();
                 if (!r.ok || text.size() > MAX_TEXT) return;
@@ -887,13 +981,21 @@ public:
                 std::string_view text = r.text();
                 if (!r.ok) return;
                 on_hello(std::string(text));
+            } else if (section == SEC_PLAYER) {
+                // Another guest, passed on by the host. A host takes this from nobody: a guest speaks for itself.
+                const auto slot = r.get<uint8_t>();
+                Sample s = get_sample(r);
+                if (r.ok && role_ != "host" && slot >= FIRST_GUEST_SLOT && slot <= MAX_SLOT && sane(s.x) && sane(s.y) && sane(s.z) &&
+                    sane(s.yaw) && sane(s.hp) && sane(s.max_hp))
+                    box_.on_player(slot, s, ms);
             } else {
                 return;
             }
         }
     }
 
-    std::string status(double now) {
+    // rejected_elsewhere: a party's other relays', which share this socket.
+    std::string status(double now, long long rejected_elsewhere = 0) {
         bool connected = peer_ && now - last_heard_ <= PEER_TIMEOUT;
         std::string peer = "-";
         if (peer_) {
@@ -920,19 +1022,42 @@ public:
                " rtt_ms=" + rtt + " route=" + route.kind +
                " route_ping_ms=" + (route.ping_ms < 0 ? "-" : std::to_string(route.ping_ms)) +
                " sent=" + std::to_string(sent_) + " received=" + std::to_string(received_) +
-               " filtered=" + std::to_string(link_->filtered) + " rejected=" + std::to_string(rejected_) +
+               " filtered=" + std::to_string(link_->filtered) + " rejected=" + std::to_string(rejected_ + rejected_elsewhere) +
                " auth=" + (auth_ ? "on" : "off") + " version=" + version_ +
                " partner_version=" + (partner_version_.empty() ? "-" : partner_version_) +
                " partner_map=" + (partner_map_.empty() ? "-" : partner_map_) +
                " mismatch=" + (mismatch.empty() ? "-" : mismatch) + " events_acked=" + std::to_string(sure_out_.acked) +
                " events_in=" + std::to_string(sure_in_.count) + quality +
                " link_problem=" + (problem.empty() ? "-" : problem) + " refused=" + std::to_string(link_->refused) +
-               " time=" + std::to_string(static_cast<long long>(std::time(nullptr)));
+               " time=" + std::to_string(static_cast<long long>(std::time(nullptr))) +
+               (party_players_ ? " players=" + std::to_string(party_players_) + " slot=" + std::to_string(party_slot_) : "");
     }
 
     std::string describe_self() { return link_->describe_self(); }
 
     std::wstring status_path;
+
+    // One of a party's relays (party.hpp): what its guest says goes to hub, and its hello says who's who.
+    void join_party(Hub* hub, int slot, int players) {
+        hub_ = hub;
+        my_slot_ = slot;
+        hello_extra_ = "players=" + std::to_string(players) + "\nslot=" + std::to_string(slot) + "\n";
+    }
+
+    // Where another guest is, for this one: newest wins.
+    void queue_player(int slot, const Sample& s) {
+        players_out_[slot - FIRST_GUEST_SLOT] = s;
+        players_waiting_ = true;
+    }
+
+    bool has_partner() const { return peer_.has_value(); }
+    bool partner_is(const Addr& a) const { return peer_ && *peer_ == a; }
+    bool here(double now) const { return peer_ && now - last_heard_ <= PEER_TIMEOUT; }
+    bool heard_of_someone() const { return !partner_version_.empty(); }
+    long long rejected() const { return rejected_; }
+    const std::string& partner_version() const { return partner_version_; }
+    const std::string& partner_map() const { return partner_map_; }
+    const std::vector<std::string>& mismatch() const { return mismatch_; }
 
 private:
     void new_session() {
@@ -982,7 +1107,7 @@ private:
     std::string hello_text() const {
         std::string text = version_ + "\n" + map_name_.substr(0, 64) + "\n";
         for (const auto& [key, value] : settings_) text += key + "=" + value + "\n";
-        return text;
+        return text + hello_extra_;
     }
 
     void flush(double now) {
@@ -1004,7 +1129,7 @@ private:
         // it hear S, this side hears S too, and each tells the other again what it needs to know.
         if (sure_out_.overflowed && peer_session_ != 0 && partner_here) {
             new_session();
-            box_.on_partner_restart();
+            tell_restart();
         }
 
         if (!peer_) {
@@ -1065,6 +1190,21 @@ private:
             w.text(enemy_out_.front());
             enemy_out_.pop_front();
         }
+        if (players_waiting_ && now - last_players_ >= PLAYERS_EVERY) {
+            last_players_ = now;
+            players_waiting_ = false;
+            for (size_t i = 0; i < players_out_.size(); i++) {
+                if (!players_out_[i]) continue;
+                if (!room(1 + 1 + SAMPLE_BYTES)) {
+                    players_waiting_ = true;
+                    break;
+                }
+                w.put<uint8_t>(SEC_PLAYER);
+                w.put<uint8_t>(static_cast<uint8_t>(FIRST_GUEST_SLOT + i));
+                put_sample(w, *players_out_[i]);
+                players_out_[i].reset();
+            }
+        }
         const bool ack_late = ack_wanted_at_ >= 0 && now - ack_wanted_at_ >= ACK_WAIT;
         if (p.size() > header_bytes_ || ack_late || now - last_send_ >= KEEPALIVE_EVERY) send_packet(p, now);
     }
@@ -1082,8 +1222,17 @@ private:
         quick_in_.restart();
         sure_out_.forget();
         sequence_known_ = false;
-        box_.on_partner_restart();
+        tell_restart();
         hello_due_ = true;
+    }
+
+    void tell_restart() {
+        if (hub_) {
+            box_.forget_partner();
+            hub_->on_restart(my_slot_);
+        } else {
+            box_.on_partner_restart();
+        }
     }
 
     // Past this a float stops being a place or a health bar, and sums on it stop being finite.
@@ -1101,13 +1250,23 @@ private:
         partner_version_ = clean_token(lines[0]);
         partner_map_ = clean_token(lines[1], 64);
         mismatch_.clear();
+        long players = 0, slot = 0;     // a host with more than two players says so, and who this guest is (party.hpp)
         for (size_t i = 2; i < lines.size(); i++) {
             size_t eq = lines[i].find('=');
             if (eq == std::string::npos) continue;
-            auto mine = settings_.find(lines[i].substr(0, eq));
+            const std::string key = lines[i].substr(0, eq);
+            if (key == "players") players = std::strtol(lines[i].c_str() + eq + 1, nullptr, 10);
+            else if (key == "slot") slot = std::strtol(lines[i].c_str() + eq + 1, nullptr, 10);
+            auto mine = settings_.find(key);
             // Both values went through the same cleaning, or "1 000" would differ from itself on the two PCs.
             if (mine != settings_.end() && lower(clean_token(lines[i].substr(eq + 1))) != mine->second)
                 mismatch_.push_back(mine->first);
+        }
+        if (role_ != "host") {
+            const bool party = players > 2 && players <= MAX_SLOT && slot >= FIRST_GUEST_SLOT && slot <= players;
+            party_players_ = party ? static_cast<int>(players) : 0;
+            party_slot_ = party ? static_cast<int>(slot) : 0;
+            box_.set_party(party_players_, party_slot_);
         }
     }
 
@@ -1134,7 +1293,23 @@ private:
     size_t header_bytes_ = 0;
     double last_send_ = 0, last_heard_ = 0, last_hello_ = 0, last_probe_ = -1e9, ack_wanted_at_ = -1;
     long long rejected_ = 0, received_ = 0, sent_ = 0, lost_ = 0, received_mark_ = 0, lost_mark_ = 0;
+    // A party. As a host's relay for one guest:
+    static constexpr size_t SAMPLE_BYTES = 40;
+    Hub* hub_ = nullptr;
+    int my_slot_ = 0;
+    std::string hello_extra_;
+    std::array<std::optional<Sample>, MAX_SLOT - HOST_SLOT> players_out_;
+    bool players_waiting_ = false;
+    double last_players_ = 0;
+    // As a guest: what the host's hello said.
+    int party_players_ = 0, party_slot_ = 0;
 };
+
+}  // namespace relay
+
+#include "party.hpp"
+
+namespace relay {
 
 struct Options {
     std::string role;              // "host" or "client"
@@ -1175,22 +1350,31 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
         std::unique_ptr<Link> link;
         if (o.transport == "steam") link = make_steam_link(o.role, o.peer);
         else link = std::make_unique<UdpLink>(o.role, o.peer, o.port, o.allow_any, o.this_pc_only);
-        Relay relay(o.role, o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
-        log("PBZCoop relay " + o.role + " on " + relay.describe_self() + (signed_packets ? ", packets signed (Secret set)" : ""));
-        const double start = monotonic();
-        double last_status = 0;
-        while (!mail.stop) {
-            double now = monotonic();
-            relay.tick(now);
-            if (now - last_status >= 1.0) {
-                std::string line = relay.status(now);
-                mail.set_status(line);
-                write_atomic(status_path, line + "\n");
-                log(line);
-                last_status = now;
+        const auto serve = [&](auto& relay) {
+            log("PBZCoop relay " + o.role + " on " + relay.describe_self() + (signed_packets ? ", packets signed (Secret set)" : ""));
+            const double start = monotonic();
+            double last_status = 0;
+            while (!mail.stop) {
+                double now = monotonic();
+                relay.tick(now);
+                if (now - last_status >= 1.0) {
+                    std::string line = relay.status(now);
+                    mail.set_status(line);
+                    write_atomic(status_path, line + "\n");
+                    log(line);
+                    last_status = now;
+                }
+                if (o.seconds > 0 && now - start >= o.seconds) break;
+                relay.wait();
             }
-            if (o.seconds > 0 && now - start >= o.seconds) break;
-            relay.wait();
+        };
+        // The host's setting decides: a guest follows what the host's hello says, whatever its own ini has.
+        if (o.role == "host" && lower(ini["fourplayers"]) == "on") {
+            Party party(o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
+            serve(party);
+        } else {
+            Relay relay(o.role, o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
+            serve(relay);
         }
     } catch (const std::exception& e) {
         failure = e.what();
@@ -1206,6 +1390,7 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
     // nothing of this run may reach the next one, which can be another role.
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     mail.reset();
+    mail.set_party(0, 0);
     mail.set_status(stopped);
 }
 

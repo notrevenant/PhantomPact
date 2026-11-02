@@ -5,6 +5,12 @@
 -- follow down) and the guest's own copies stay in step. Each enemy is scaled once, keeping its current share of
 -- health; enemies that respawn (bell rest) are new actors and get scaled again. The guest's copies then take the host's
 -- maximum anyway (coop.lua).
+--
+-- With 4 PLAYERS on, each person connected adds what the first did, wherever they are: another map, loading or down all count.
+-- At the default 150 and 130 that's 200 and 160 with two connected, 250 and 190 with three (EXACG's numbers, PR #11), and 100
+-- stays 100. An enemy only goes up: scaled again on the host when someone connects, where the guests' copies follow. It doesn't
+-- go back down when someone leaves, or a boss would lose health as a player dropped out. New enemies get the number of the
+-- moment. Someone who joins during a boss fight only watches, so that boss keeps its number until the fight is over.
 
 return function(api)
     local log, valid, game = api.log, api.valid, api.game
@@ -21,6 +27,7 @@ return function(api)
 
     local scaled = {}               -- enemy address -> its name once scaled (an address comes back for a new actor, after a
                                     -- map change or a respawn, and that one wasn't scaled yet)
+    local scaledFor = {}            -- more than two players: enemy address -> how many it's been scaled for
 
     local function scaleAttr(set, name, maxName, factor)
         pcall(function()
@@ -34,9 +41,44 @@ return function(api)
         end)
     end
 
+    local function forPlayers(base, players)
+        return base + (base - 1) * (players - 2)
+    end
+
+    local function playersConnected()
+        local n = 1
+        for _, p in ipairs(api.coop.partners()) do
+            if p.lastRemoteAt and not p.partnerGone then
+                n = n + 1
+            end
+        end
+        return n
+    end
+
+    -- More than two players: true if this took a scaling, which is what a tick may spend.
+    local function scaleForParty(e, addr, name, players)
+        local before = scaled[addr] == name and (scaledFor[addr] or 2) or nil
+        if before and (before >= players or not api.coop.isHost() or (game.bossFightActive() and game.isBoss(e, addr))) then
+            return false
+        end
+        scaled[addr], scaledFor[addr] = name, players
+        if game.isDead(e) then
+            return false
+        end
+        local set = e.AttributeSetBase
+        local health, posture = forPlayers(scaling.health, players), forPlayers(scaling.posture, players)
+        if before then
+            health, posture = health / forPlayers(scaling.health, before), posture / forPlayers(scaling.posture, before)
+        end
+        scaleAttr(set, "Health", "Health_Max", health)
+        scaleAttr(set, "Shachi", "Shachi_Max", posture)
+        return true
+    end
+
     -- While the partner is here: scale enemies we haven't scaled yet, a few looks a tick. The list is the one the net loop
     -- keeps: the search for enemies is its job, once a second, and two in one frame was part of the worst case.
     local next, todo, addrs, at, n = 0, {}, {}, 1, 0
+    local players = 2
     local function tick()
         if scaling.health == 1 and scaling.posture == 1 then
             return
@@ -44,15 +86,20 @@ return function(api)
         if at > #todo then
             if n > 0 then
                 log(string.format("Co-op difficulty: %d enem%s at %d%% health, %d%% posture.", n, n == 1 and "y" or "ies",
-                    math.floor(scaling.health * 100 + 0.5), math.floor(scaling.posture * 100 + 0.5)))
+                    math.floor(forPlayers(scaling.health, players) * 100 + 0.5), math.floor(forPlayers(scaling.posture, players) * 100 + 0.5)))
                 n = 0
             end
             if os.clock() < next then
                 return
             end
             next = os.clock() + PASS_S
+            players = net.party and playersConnected() or 2
+            if net.party then
+                if players < 2 then
+                    return
+                end
             -- "With you": synced and the partner's ghost is in this world (same map, alive).
-            if not (net.enabled and net.target and valid(net.ghost) and not net.ghostHidden) then
+            elseif not (net.enabled and net.target and valid(net.ghost) and not net.ghostHidden) then
                 return
             end
             todo, addrs = game.enemiesSoFar()
@@ -65,7 +112,12 @@ return function(api)
             end
             at = at + 1
             local name = valid(e) and e:GetFName():ToString()
-            if name and scaled[addr] ~= name then
+            if name and net.party then
+                if scaleForParty(e, addr, name, players) then
+                    n = n + 1
+                    return
+                end
+            elseif name and scaled[addr] ~= name then
                 scaled[addr] = name       -- (or it's dead, and nothing brings it back as the same actor)
                 if not game.isDead(e) then
                     local set = e.AttributeSetBase

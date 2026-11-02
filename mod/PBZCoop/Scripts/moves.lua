@@ -138,14 +138,15 @@ return function(api)
 
     moves.montage = montage
 
-    coop.handlers.U = function(rest)
+    coop.handlers.U = function(rest, from)
+        local p = coop.peerOf(from)
         local path, pos = (rest or ""):match("^(%S+)%s+(%S+)$")
         pos = tonumber(pos)
         if path == "-" then
-            if not net.pvp and valid(moves.ghostMontage) and valid(net.ghost) then
-                local ai = animOf(net.ghost)
+            if not net.pvp and valid(p.ghostMontage) and valid(p.ghost) then
+                local ai = animOf(p.ghost)
                 if ai then
-                    pcall(function() ai:Montage_Stop(STOP_BLEND_S, moves.ghostMontage) end)
+                    pcall(function() ai:Montage_Stop(STOP_BLEND_S, p.ghostMontage) end)
                 end
             end
             return
@@ -155,11 +156,11 @@ return function(api)
             return
         end
         moves.partnerSends = true
-        if net.pvp or not valid(net.ghost) or net.ghostHidden then
+        if net.pvp or not valid(p.ghost) or p.ghostHidden then
             return
         end
         local m = montage(path)
-        local ai = animOf(net.ghost)
+        local ai = animOf(p.ghost)
         if not (m and ai) then
             moves.failed = moves.failed + 1
             return
@@ -168,9 +169,9 @@ return function(api)
         local ok = pcall(function() ai:Montage_Play(m, 1.0, 0, start, true) end)
         if ok then
             moves.played = moves.played + 1
-            moves.ghostMontage = m
+            p.ghostMontage = m
             if game.noteGhostMove then
-                game.noteGhostMove()
+                game.noteGhostMove(p.ghost)
             end
         else
             moves.failed = moves.failed + 1
@@ -187,7 +188,13 @@ return function(api)
     local GEAR_PATH_S = 0.5         -- and which weapon it is
     local GEAR_DRESS_S = 0.25       -- how often the ghost is checked against the partner
     local GEAR_SWAP_S = 5.0         -- a weapon change that didn't take isn't tried again sooner
-    local gear = { watchAt = 0, pathAt = 0, dressAt = 0, swapAt = 0 }
+    local gear = { watchAt = 0, pathAt = 0 }
+
+    -- What one other player holds, kept with them.
+    local function gearOf(p)
+        p.gear = p.gear or { dressAt = 0, swapAt = 0 }
+        return p.gear
+    end
 
     local function mainSlot()
         gear.slot = gear.slot or { TagName = FName("Weapon.Slot.Main") }
@@ -228,17 +235,18 @@ return function(api)
         end
     end
 
-    coop.handlers.W = function(rest)
+    coop.handlers.W = function(rest, from)
         local path, armed = (rest or ""):match("^(%S+)%s+([01])$")
         if not allowedPath(path) then
             moves.refused = moves.refused + 1
             return
         end
-        if path ~= gear.partnerPath then
-            gear.swapAt = 0
+        local theirs = gearOf(coop.peerOf(from))
+        if path ~= theirs.partnerPath then
+            theirs.swapAt = 0
         end
-        gear.partnerPath, gear.partnerArmed = path, armed == "1"
-        gear.dressAt = 0
+        theirs.partnerPath, theirs.partnerArmed = path, armed == "1"
+        theirs.dressAt = 0
     end
 
     -- Weapon configs load like montages: same paths, same cap. Not an AnimMontage, so not through the same cache.
@@ -259,24 +267,24 @@ return function(api)
         return nil
     end
 
-    local function dressGhost(now)
-        local ghost = net.ghost
-        if not gear.partnerPath or now < gear.dressAt or not valid(ghost) or net.ghostHidden then
+    local function dressGhost(p, now)
+        local ghost, theirs = p.ghost, gearOf(p)
+        if not theirs.partnerPath or now < theirs.dressAt or not valid(ghost) or p.ghostHidden then
             return
         end
-        gear.dressAt = now + GEAR_DRESS_S
+        theirs.dressAt = now + GEAR_DRESS_S
         local cwc = ghost["Character Weapons Component"]
         local slot = mainSlot()
-        if now >= gear.swapAt and heldConfig(cwc) ~= gear.partnerPath then
-            gear.swapAt = now + GEAR_SWAP_S
-            local cfg = weaponConfig(gear.partnerPath)
+        if now >= theirs.swapAt and heldConfig(cwc) ~= theirs.partnerPath then
+            theirs.swapAt = now + GEAR_SWAP_S
+            local cfg = weaponConfig(theirs.partnerPath)
             if cfg then
                 cwc:SetSlotWeapon(slot, math.max(cwc:GetCurrentWeaponIndex(slot, false) or 0, 0), cfg)
-                log("The ghost now holds " .. gear.partnerPath:match("([^.]+)$") .. ".")
+                log("The ghost now holds " .. theirs.partnerPath:match("([^.]+)$") .. ".")
             end
         end
-        if (cwc:IsArmed(slot) == true) ~= gear.partnerArmed then
-            cwc:SetArmed(slot, gear.partnerArmed)
+        if (cwc:IsArmed(slot) == true) ~= theirs.partnerArmed then
+            cwc:SetArmed(slot, theirs.partnerArmed)
         end
     end
 
@@ -288,9 +296,16 @@ return function(api)
 
     -- The partner has just (re)started sync: it knows nothing yet.
     local partnerStarted = coop.handlers.S
-    coop.handlers.S = function(rest)
+    coop.handlers.S = function(rest, from)
         gear.sentPath = nil
-        return partnerStarted(rest)
+        return partnerStarted(rest, from)
+    end
+
+    -- Someone new in a party: the same.
+    local someoneJoined = coop.handlers.J
+    coop.handlers.J = function(rest, from)
+        gear.sentPath = nil
+        return someoneJoined(rest, from)
     end
 
     -- Ability replays only in PvP.
@@ -315,8 +330,10 @@ return function(api)
         end
         local now = os.clock()
         ok, err = pcall(watchGear, now)
-        if ok then
-            ok, err = pcall(dressGhost, now)
+        for _, p in ipairs(coop.partners()) do
+            if ok then
+                ok, err = pcall(dressGhost, p, now)
+            end
         end
         if not ok and err ~= gear.lastError then
             gear.lastError = err

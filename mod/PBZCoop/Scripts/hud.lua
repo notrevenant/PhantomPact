@@ -2,6 +2,8 @@
 -- they are relative to where your camera faces. Straight ahead is the middle; further than COMPASS_HALF_DEG
 -- to a side, the icon waits at that end, dimmed (turn that way). Red while they're down; hidden while they're
 -- in another area or gone.
+-- With more than two players there's a dot for each (EXACG's, PR #11), in that player's colour (coop.players), and two that
+-- would sit on one another are moved apart.
 -- PhantomPact.ini PartnerCompass = On|Off. Art (painted in Lumina, in the game's ink-wash style): art/compass_line.png
 -- (a dry-brush silver stroke) and art/partner_dot.png (a silver seal with 伴, "companion"), shown in the game's own
 -- one-image widget (W_PaintSize). (Idea from appdoze's PR #5 partner HUD; a compass instead of big labels.)
@@ -27,6 +29,7 @@ return function(api)
 
     local hud = { on = true }
     local lineWidget, dotWidget
+    local extraDots = {}            -- more than two players: the dots after dotWidget, as { widget, x, y, tint, dim }
     local textures = {}
 
     local function texture(name)
@@ -101,6 +104,15 @@ return function(api)
 
     local forgetShown = nil         -- (set below)
 
+    local function removeExtraDots()
+        for _, d in ipairs(extraDots) do
+            if valid(d.widget) then
+                pcall(function() d.widget:RemoveFromParent() end)
+            end
+        end
+        extraDots = {}
+    end
+
     local function remove()
         for _, w in ipairs({ lineWidget, dotWidget }) do
             if valid(w) then
@@ -108,6 +120,7 @@ return function(api)
             end
         end
         lineWidget, dotWidget = nil, nil
+        removeExtraDots()
         forgetShown()
     end
 
@@ -215,8 +228,104 @@ return function(api)
         setShown(true)
     end
 
+    local firstDot = {}             -- what dotWidget was last told, with more than two players
+
+    -- One partner's dot. taken: where the dots before it went.
+    local function placeDot(d, p, from, cameraYaw, taken)
+        local t = p.target
+        local angle = math.deg(math.atan(t.Y - from.Y, t.X - from.X))
+        local deg = (angle - cameraYaw + 540) % 360 - 180
+        local x, y = centre + math.max(-1, math.min(1, deg / COMPASS_HALF_DEG)) * width / 2, dotY
+        for _, other in ipairs(taken) do
+            if math.abs(other - x) < DOT_SIZE * 0.7 then
+                y = y + DOT_SIZE * 0.9
+            end
+        end
+        taken[#taken + 1] = x
+        if d.x == nil or math.abs(x - d.x) >= MOVED_PX or y ~= d.y then
+            d.x, d.y = x, y
+            d.widget:SetPositionInViewport({ X = x, Y = y }, false)
+        end
+        local tint = (t.MaxHp and t.MaxHp > 0 and t.Hp and t.Hp <= 0) and DOWN_TINT or coop.players[p.number].tint
+        local dim = math.abs(deg) > COMPASS_HALF_DEG and 0.55 or 1.0
+        if tint ~= d.tint or dim ~= d.dim then
+            d.tint, d.dim = tint, dim
+            pcall(function()
+                d.widget.Circle:SetColorAndOpacity(tint)
+                d.widget:SetRenderOpacity(dim)
+            end)
+        end
+    end
+
+    local function updateParty()
+        local list = {}
+        for _, p in ipairs(coop.partners()) do
+            local t = p.target
+            if hud.on and t and p.lastRemoteAt and not p.partnerGone and os.clock() - p.lastRemoteAt <= FRESH_S
+                and not (t.Map and net.localMap and t.Map ~= net.localMap) then
+                list[#list + 1] = p
+            end
+        end
+        if #list == 0 then
+            setShown(false)
+            for _, d in ipairs(extraDots) do
+                show(d.widget, false)
+            end
+            return
+        end
+        local now = os.clock()
+        if now >= nextLayout or not (valid(dotWidget) and valid(camera)) then
+            nextLayout = layOut() and now + LAYOUT_S or 0
+            if not (valid(dotWidget) and valid(camera)) then
+                return
+            end
+            for _, d in ipairs(extraDots) do
+                if valid(d.widget) then
+                    fit(d.widget, DOT_SIZE, DOT_SIZE)
+                end
+            end
+        end
+        -- (Widgets don't survive a map change, and a gone one crashes the game when touched: looked at each time.)
+        for i = #extraDots, 1, -1 do
+            if not onScreen(extraDots[i].widget) then
+                table.remove(extraDots, i)
+            end
+        end
+        local from = net.localLoc
+        if not from then
+            return
+        end
+        -- (New from layOut, or a guest's two-player compass that heard it's a party a moment after it started.)
+        if dotX == nil or firstDot.widget == nil then
+            firstDot, dotX = { widget = dotWidget }, 0
+        end
+        local taken, cameraYaw = {}, camera:GetCameraRotation().Yaw
+        placeDot(firstDot, list[1], from, cameraYaw, taken)
+        for i = 2, #list do
+            local d = extraDots[i - 1]
+            if d == nil then
+                local w = newImage("partner_dot.png", DOT_SIZE, DOT_SIZE)
+                if not w then
+                    return
+                end
+                d = { widget = w }
+                extraDots[i - 1] = d
+                nextLayout = 0                  -- (it's sized on a look, a frame after it's made)
+            end
+            placeDot(d, list[i], from, cameraYaw, taken)
+            show(d.widget, true)
+        end
+        for i = #list, #extraDots do
+            show(extraDots[i].widget, false)
+        end
+        setShown(true)
+    end
+
     coop.extraTicks.hud = function()
-        local ok, err = pcall(update)
+        if not net.party and #extraDots > 0 then
+            removeExtraDots()
+        end
+        local ok, err = pcall(net.party and updateParty or update)
         if not ok and err ~= hud.lastError then
             hud.lastError = err
             log("compass: " .. tostring(err))

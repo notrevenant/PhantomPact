@@ -28,6 +28,12 @@
 -- Roles: the host's world is the truth for enemies (positions, health, deaths); the client mirrors it and
 -- reports its own hits. Each side shows the other's player as a "ghost" Hun steered by movement input.
 -- Who decides what (and why) is written up in docs/AUTHORITY.md.
+--
+-- With more than two players (FourPlayers = On on the host, beta) each player has a slot: 1 is the host, 2 to 4 the guests.
+-- The relay passes a guest's events on (native/party.hpp), and they arrive here as "@<slot> <event>"; the host's come as
+-- they always did. Where the code says p, that's one other player: with two players p is net itself, so everything runs
+-- as it always has, and in a party each has a table of their own with the same fields (see partners).
+--       J <slot>             host -> guests: a player has just joined, and doesn't know what the others hold
 
 return function(api)
     local log, valid, getPlayer1, fmtVec, distance = api.log, api.valid, api.getPlayer1, api.fmtVec, api.distance
@@ -115,8 +121,48 @@ return function(api)
         healTicks = {},           -- client: host id -> rounds in a row the host's health was clearly above ours
         hostSeen = {},            -- host, PvP: name -> { hp, posture } last tick, to undo the ghost's own hits
         deadSince = nil,          -- os.clock() when the local player died (spectating starts a little later)
+        party = nil,              -- with more than two players: how many at most (the host's FourPlayers); nil with two
+        slot = nil,               -- party: this player's number
+        peers = {},               -- party: slot -> what's known of that player (a guest's host is net itself)
+        peerList = nil,           -- party: the same, in slot order
+        lead = nil,               -- party: who net stands for: a guest's host, or the host's first guest who's here
+        ghostSlots = {},          -- party: ghost address -> slot
+        hitHere = {},             -- party, client: enemy id -> this player hit it
+        fightOf = {},             -- party: boss id -> the slot of whoever started that fight
         stats = { sent = 0, received = 0, applied = 0, undone = 0 },
     }
+
+    -- Who's who with more than two players, the same on every PC: on the compass, on the map and in tips. (Red is for down.)
+    local PLAYERS = {
+        { name = "the host (purple)", tint = { R = 0.78, G = 0.55, B = 1.0, A = 1.0 } },
+        { name = "player 2 (green)", tint = { R = 0.30, G = 0.85, B = 0.55, A = 1.0 } },
+        { name = "player 3 (gold)", tint = { R = 1.0, G = 0.78, B = 0.25, A = 1.0 } },
+        { name = "player 4 (blue)", tint = { R = 0.35, G = 0.68, B = 1.0, A = 1.0 } },
+    }
+
+    local justNet = { net }
+
+    -- Everyone else. With two players that's net, as it always was.
+    local function partners()
+        return net.peerList or justNet
+    end
+
+    -- Who an event came from. No tag: the host, or with two players the partner.
+    local function peerOf(from)
+        if from == nil then
+            return net
+        end
+        local p = net.peers[from]
+        if p == nil then
+            p = { number = from }
+            net.peers[from] = p
+            if net.peerList then
+                net.peerList[#net.peerList + 1] = p
+                table.sort(net.peerList, function(a, b) return a.number < b.number end)
+            end
+        end
+        return p
+    end
 
     local function isHost()
         return net.role ~= "client"
@@ -166,6 +212,12 @@ return function(api)
         net.stats.sent = net.stats.sent + 1
     end
 
+    -- A party's host: a sure event for one guest alone.
+    local function sendTo(slot, kind, ...)
+        link.send_to(slot, table.concat({ kind, ... }, " "))
+        net.stats.sent = net.stats.sent + 1
+    end
+
     local handlers = {}
 
     local function processEvents()
@@ -175,10 +227,15 @@ return function(api)
         end
         for line in text:gmatch("[^\n]+") do
             local kind, rest = line:match("^(%S+)%s*(.*)$")
+            local from = kind and kind:match("^@([2-4])$")      -- another guest, or on the host any guest (native/party.hpp)
+            if from then
+                from = tonumber(from)
+                kind, rest = rest:match("^(%S+)%s*(.*)$")
+            end
             local h = kind and handlers[kind]
             net.stats.received = net.stats.received + 1
             if h then
-                local ok, err = pcall(h, rest)
+                local ok, err = pcall(h, rest, from)
                 if not ok then
                     log("event " .. kind .. " error: " .. tostring(err))
                 end
@@ -191,7 +248,7 @@ return function(api)
 
     ------------------------------------------------------------------ ghost (the remote player)
 
-    local function spawnGhost()
+    local function spawnGhost(p)
         local ghostClass
         if net.ghostMode == "clone" then
             local _, pawn = getPlayer1()
@@ -200,91 +257,97 @@ return function(api)
         if not valid(ghostClass) then
             ghostClass = StaticFindObject(GHOST_CLASS)
         end
-        net.ghost = spawnBesidePlayer1(ghostClass)
-        if not valid(net.ghost) then
+        p.ghost = spawnBesidePlayer1(ghostClass)
+        if not valid(p.ghost) then
             return
         end
-        net.ghostAddr = net.ghost:GetAddress()
-        net.ghostWalks = false
-        net.ghostGliding = false
-        net.ghostHidden = nil       -- the last one went with the old world: this one is told afresh whether to show
+        if net.party then
+            if p.ghostAddr then
+                net.ghostSlots[p.ghostAddr] = nil
+            end
+            net.ghostSlots[p.ghost:GetAddress()] = p.number
+        end
+        p.ghostAddr = p.ghost:GetAddress()
+        p.ghostWalks = false
+        p.ghostGliding = false
+        p.ghostHidden = nil         -- the last one went with the old world: this one is told afresh whether to show
         if net.ghostMode == "clone" then
             -- Steered with movement input (see steerGhost) so the game's own locomotion animations play.
             -- It needs collision for the floor, but should not shove player 1 around.
-            net.ghostWalks = pcall(function()
-                local cmc = net.ghost.CharacterMovement
+            p.ghostWalks = pcall(function()
+                local cmc = p.ghost.CharacterMovement
                 cmc.bRunPhysicsWithNoController = true
                 cmc:SetMovementMode(MOVE_WALKING, 0)
             end)
-            pcall(function() net.ghost.CapsuleComponent:SetCollisionResponseToChannel(ECC_PAWN, ECR_IGNORE) end)
+            pcall(function() p.ghost.CapsuleComponent:SetCollisionResponseToChannel(ECC_PAWN, ECR_IGNORE) end)
             pcall(function()
-                local cmc = net.ghost.CharacterMovement
+                local cmc = p.ghost.CharacterMovement
                 cmc.AirControl = 1.0              -- it follows the partner in the air too
                 cmc.MaxAcceleration = GHOST_ACCELERATION
-                net.ghostCmc = cmc
+                p.ghostCmc = cmc
             end)
             if game.setupGhost then
-                game.setupGhost(net.ghost)
+                game.setupGhost(p.ghost)
             end
             if game.shieldGhost then
                 game.ghostGone()
-                game.shieldGhost(net.ghost, not net.pvp)
+                game.shieldGhost(p.ghost, not net.pvp)
             end
         end
-        if not net.ghostWalks then
+        if not p.ghostWalks then
             -- Teleported every tick, so its own movement (gravity, root motion) must stay out of the way.
-            net.ghost:SetActorEnableCollision(false)
-            pcall(function() net.ghost.CharacterMovement:DisableMovement() end)
+            p.ghost:SetActorEnableCollision(false)
+            pcall(function() p.ghost.CharacterMovement:DisableMovement() end)
         end
-        local t = net.target
-        net.ghost:K2_SetActorLocationAndRotation({ X = t.X, Y = t.Y, Z = t.Z },
+        local t = p.target
+        p.ghost:K2_SetActorLocationAndRotation({ X = t.X, Y = t.Y, Z = t.Z },
             { Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false, {}, true)
         log("Remote player ghost spawned.")
     end
 
     -- The ghost disappears while the remote player is dead (health 0) or on another map, and comes back when
     -- they revive or arrive (the snap distance then moves it straight to them).
-    local function updateGhostVisibility()
-        if not valid(net.ghost) or net.target == nil then
+    local function updateGhostVisibility(p)
+        if not valid(p.ghost) or p.target == nil then
             return
         end
-        local t = net.target
+        local t = p.target
         local otherMap = t.Map ~= nil and net.localMap ~= nil and t.Map ~= net.localMap
         -- Only "down" after a full second at 0 HP: a single 0 read during a teleport or loading hitch made the
         -- ghost flicker in the first live two-copy test.
         local zero = t.MaxHp ~= nil and t.MaxHp > 0 and t.Hp ~= nil and t.Hp <= 0
         if zero then
-            net.zeroSince = net.zeroSince or os.clock()
+            p.zeroSince = p.zeroSince or os.clock()
         else
-            net.zeroSince = nil
+            p.zeroSince = nil
         end
-        local dead = zero and (os.clock() - net.zeroSince) >= 1.0
-        local gone = net.partnerGone == true     -- see watchPartner
+        local dead = zero and (os.clock() - p.zeroSince) >= 1.0
+        local gone = p.partnerGone == true       -- see watchPartner
         -- In a cutscene the partner isn't really playing: their ghost would stand idle in your world. Short
         -- sequences are part of play, and a ghost hidden for each one blinked in and out.
         local away = otherMap or t.Cine == true
         if away then
-            net.awaySince = net.awaySince or os.clock()
+            p.awaySince = p.awaySince or os.clock()
         else
-            net.awaySince = nil
+            p.awaySince = nil
         end
-        local hide = dead or gone or (away and os.clock() - net.awaySince >= GHOST_AWAY_S)
-        if hide ~= net.ghostHidden then
-            net.ghostHidden = hide
-            net.ghostGliding = false
+        local hide = dead or gone or (away and os.clock() - p.awaySince >= GHOST_AWAY_S)
+        if hide ~= p.ghostHidden then
+            p.ghostHidden = hide
+            p.ghostGliding = false
             pcall(function()
-                net.ghost:SetActorHiddenInGame(hide)
-                net.ghost:SetActorEnableCollision(net.ghostWalks and not hide)
-                if net.ghostWalks then
+                p.ghost:SetActorHiddenInGame(hide)
+                p.ghost:SetActorEnableCollision(p.ghostWalks and not hide)
+                if p.ghostWalks then
                     -- Without collision it would fall through the world: 20 km by the time it came back.
-                    net.ghost.CharacterMovement:SetMovementMode(hide and MOVE_NONE or MOVE_WALKING, 0)
+                    p.ghost.CharacterMovement:SetMovementMode(hide and MOVE_NONE or MOVE_WALKING, 0)
                 end
             end)
             if api.moves then
-                pcall(api.moves.hideGear, net.ghost, hide)    -- its weapon is an actor of its own
+                pcall(api.moves.hideGear, p.ghost, hide)      -- its weapon is an actor of its own
             end
             if isHost() then
-                game.ghostInFight(net.ghost, not hide, (game.enemiesSoFar()))
+                game.ghostInFight(p.ghost, not hide, (game.enemiesSoFar()))
             end
             if hide then
                 log("Ghost hidden: the other player is " .. (gone and "gone" or dead and "down"
@@ -295,37 +358,43 @@ return function(api)
         end
     end
 
+    local function updateVisibility()
+        for _, p in ipairs(partners()) do
+            updateGhostVisibility(p)
+        end
+    end
+
     -- The ghost only walks, so a partner climbing a cliff left it pressing against the rock until the height gap
     -- reached the snap distance. A big gap in height moves it directly instead, and so does a climb from its first frame
     -- (the game flies the player along the climb's montage, which plays on the ghost too). True while gliding.
-    local function glideGhost(cur, t)
+    local function glideGhost(p, cur, t)
         local gap = math.abs(t.Z - cur.Z)
-        if not net.ghostGliding then
+        if not p.ghostGliding then
             -- The partner stands on ground this PC hasn't loaded (it isn't, this far from us): left to fall, the ghost sank
             -- metres into the distant scenery, out of sight, and came back, again every few seconds.
-            local noFloor = t.Grounded and t.Z - cur.Z > GHOST_NO_FLOOR_CM and net.ghostCmc.MovementMode == MOVE_FALLING
+            local noFloor = t.Grounded and t.Z - cur.Z > GHOST_NO_FLOOR_CM and p.ghostCmc.MovementMode == MOVE_FALLING
             if gap < GHOST_CLIMB_CM and not t.Climbing and not noFloor then
                 return false
             end
-            net.ghostGliding = true
-            net.ghost.CharacterMovement:SetMovementMode(MOVE_FLYING, 0)
+            p.ghostGliding = true
+            p.ghost.CharacterMovement:SetMovementMode(MOVE_FLYING, 0)
             if t.Climbing then
-                net.ghostHoverUntil = nil
-            elseif net.ghostLandedAt and os.clock() - net.ghostLandedAt < GHOST_FAILED_LANDING_S then
-                net.ghostHoverUntil = os.clock() + GHOST_HOVER_S
+                p.ghostHoverUntil = nil
+            elseif p.ghostLandedAt and os.clock() - p.ghostLandedAt < GHOST_FAILED_LANDING_S then
+                p.ghostHoverUntil = os.clock() + GHOST_HOVER_S
             else
                 log("Ghost gliding: the other player is " .. math.floor(gap) .. " cm higher or lower.")
             end
-        elseif gap <= GHOST_LAND_CM and t.Grounded and os.clock() >= (net.ghostHoverUntil or 0) then
+        elseif gap <= GHOST_LAND_CM and t.Grounded and os.clock() >= (p.ghostHoverUntil or 0) then
             -- (Not while they hang on a cliff: a ghost walking in mid-air falls, then glides back up, again and again.)
-            net.ghostGliding = false
-            net.ghostLandedAt = os.clock()
-            net.ghost.CharacterMovement:SetMovementMode(MOVE_WALKING, 0)
+            p.ghostGliding = false
+            p.ghostLandedAt = os.clock()
+            p.ghost.CharacterMovement:SetMovementMode(MOVE_WALKING, 0)
             return false
         end
         -- (The played path is already smooth, and a climb must stay on it: its hands are on the rungs.)
         local a = (t.Climbing or distance(cur, t) > GHOST_SNAP_CM) and 1.0 or GHOST_GLIDE_SMOOTHING
-        net.ghost:K2_SetActorLocationAndRotation(
+        p.ghost:K2_SetActorLocationAndRotation(
             { X = cur.X + (t.X - cur.X) * a, Y = cur.Y + (t.Y - cur.Y) * a, Z = cur.Z + (t.Z - cur.Z) * a },
             { Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false, {}, true)
         return true
@@ -334,36 +403,51 @@ return function(api)
     -- The ghost's speed is the partner's own along the path being played, plus a pull back onto it if it has drifted, so
     -- it stays on the path at any speed instead of trailing behind. Its own movement keeps it on the ground and plays the
     -- game's locomotion animations.
-    local function steerGhost()
-        if not valid(net.ghost) or net.target == nil or (net.ghostWalks and not valid(net.ghostCmc)) then
+    local function steerGhost(p)
+        if not valid(p.ghost) or p.target == nil or (p.ghostWalks and not valid(p.ghostCmc)) then
             return
         end
-        local cur = net.ghost:K2_GetActorLocation()
-        local t = net.target
-        if net.ghostHidden or (net.ghostWalks and glideGhost(cur, t)) then
+        local cur
+        if net.party then
+            -- Three of these a frame: nothing for a ghost nobody sees, and its place straight from memory (game.where).
+            if p.ghostHidden then
+                return
+            end
+            local x, y, z = game.where(p.ghost, p.ghostAddr)
+            if x == nil then
+                return
+            end
+            cur = p.spot or {}
+            cur.X, cur.Y, cur.Z = x, y, z
+            p.spot = cur
+        else
+            cur = p.ghost:K2_GetActorLocation()
+        end
+        local t = p.target
+        if p.ghostHidden or (p.ghostWalks and glideGhost(p, cur, t)) then
             return
         end
         -- The game's own launch, not a jump button: nobody controls the ghost, so Jump() would do nothing. Asked of the
         -- ghost itself: a jump during a replayed move counts too, and it can't launch twice.
-        if net.ghostWalks and t.Falling and t.VZ > GHOST_JUMP_SPEED and net.ghostCmc.MovementMode == MOVE_WALKING then
-            net.ghost:LaunchCharacter({ X = t.VX, Y = t.VY, Z = t.VZ }, true, true)
+        if p.ghostWalks and t.Falling and t.VZ > GHOST_JUMP_SPEED and p.ghostCmc.MovementMode == MOVE_WALKING then
+            p.ghost:LaunchCharacter({ X = t.VX, Y = t.VY, Z = t.VZ }, true, true)
         end
         local dx, dy = t.X - cur.X, t.Y - cur.Y
         local dist = math.sqrt(dx * dx + dy * dy)
-        if game.ghostBusy and game.ghostBusy(net.ghost) and dist < GHOST_CORRECT_CM then
+        if game.ghostBusy and game.ghostBusy(p.ghost) and dist < GHOST_CORRECT_CM then
             -- Mid attack/dodge the move's own motion plays out, with a soft pull so a knockback or a turn doesn't leave
             -- it metres off by the time the move ends.
             if dist > GHOST_BUSY_CM then
-                net.ghost:K2_SetActorLocation({ X = cur.X + dx * GHOST_BUSY_PULL, Y = cur.Y + dy * GHOST_BUSY_PULL, Z = cur.Z },
+                p.ghost:K2_SetActorLocation({ X = cur.X + dx * GHOST_BUSY_PULL, Y = cur.Y + dy * GHOST_BUSY_PULL, Z = cur.Z },
                     false, {}, true)
             end
-            net.ghost:K2_SetActorRotation({ Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false)
+            p.ghost:K2_SetActorRotation({ Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false)
             return
         end
-        if net.ghostWalks then
+        if p.ghostWalks then
             if dist > GHOST_SNAP_CM or math.abs(t.Z - cur.Z) > GHOST_SNAP_CM then
                 -- Too far behind (teleport, fall, cutscene): jump straight there.
-                net.ghost:K2_SetActorLocationAndRotation({ X = t.X, Y = t.Y, Z = t.Z },
+                p.ghost:K2_SetActorLocationAndRotation({ X = t.X, Y = t.Y, Z = t.Z },
                     { Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false, {}, true)
                 return
             end
@@ -371,16 +455,22 @@ return function(api)
             local speed = math.sqrt(vx * vx + vy * vy)
             if speed > GHOST_STILL then
                 -- PBZ leaves MaxWalkSpeed at 0 on an unpossessed Hun (its locomotion system sets it for players).
-                net.ghostCmc.MaxWalkSpeed = math.min(GHOST_MAX_SPEED, speed)
-                net.ghost:AddMovementInput({ X = vx / speed, Y = vy / speed, Z = 0.0 }, 1.0, false)
+                p.ghostCmc.MaxWalkSpeed = math.min(GHOST_MAX_SPEED, speed)
+                p.ghost:AddMovementInput({ X = vx / speed, Y = vy / speed, Z = 0.0 }, 1.0, false)
             end
-            net.ghost:K2_SetActorRotation({ Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false)
+            p.ghost:K2_SetActorRotation({ Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false)
             return
         end
         local a = GHOST_SMOOTHING
-        net.ghost:K2_SetActorLocationAndRotation(
+        p.ghost:K2_SetActorLocationAndRotation(
             { X = cur.X + (t.X - cur.X) * a, Y = cur.Y + (t.Y - cur.Y) * a, Z = cur.Z + (t.Z - cur.Z) * a },
             { Pitch = 0.0, Yaw = t.Yaw, Roll = 0.0 }, false, {}, true)
+    end
+
+    local function steerGhosts()
+        for _, p in ipairs(partners()) do
+            steerGhost(p)
+        end
     end
 
     handlers.M = function(rest)
@@ -411,7 +501,33 @@ return function(api)
         return dx * dx + dy * dy + dz * dz <= ENEMY_RADIUS_CM * ENEMY_RADIUS_CM
     end
 
-    local function updateReach(origin, origin2, dt)
+    -- A party's host: where the guests near enough are. Kept, not made anew: this runs every frame.
+    local guestSpots = {}
+    local function guestsNear(origin)
+        local n = 0
+        for _, p in ipairs(partners()) do
+            local t = p.target
+            if t ~= nil and not p.ghostHidden and gap3d(origin, t) <= PARTNER_REACH_CM then
+                n = n + 1
+                guestSpots[n] = t
+            end
+        end
+        for i = #guestSpots, n + 1, -1 do
+            guestSpots[i] = nil
+        end
+        return guestSpots
+    end
+
+    local function nearAny(x, y, z, spots)
+        for _, o in ipairs(spots) do
+            if inReach(x, y, z, o) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function updateReach(origin, origin2, dt, spots)
         if reach.at > #reach.list then
             reach.list, reach.addrs = game.listEnemies()
             reach.at = 1
@@ -423,10 +539,11 @@ return function(api)
             end
             reach.at = reach.at + 1
             local x, y, z = nil, nil, nil
-            if addr ~= net.ghostAddr then         -- (an address the ghost took over from an enemy, until facts are cleared)
+            if addr ~= net.ghostAddr and not net.ghostSlots[addr] then    -- (an address a ghost took over from an enemy, until facts are cleared)
                 x, y, z = game.where(e, addr)
             end
-            if x ~= nil and (inReach(x, y, z, origin) or (origin2 ~= nil and inReach(x, y, z, origin2))) then
+            if x ~= nil and (inReach(x, y, z, origin) or (origin2 ~= nil and inReach(x, y, z, origin2))
+                or (spots ~= nil and nearAny(x, y, z, spots))) then
                 local near = reach.near[addr]
                 if near then
                     near.actor, near.loc.X, near.loc.Y, near.loc.Z = e, x, y, z
@@ -549,6 +666,25 @@ return function(api)
         end
     end
 
+    -- A party's host, an enemy's aggro turn: every ghost here goes on its hatred list, and its focus is steered among all the
+    -- players near it. Their ghosts' places are what the relay last said: no calls into the game for each of them.
+    local function aggroParty(actor, addr, x, y, z, hp)
+        local here = {}
+        for _, p in ipairs(partners()) do
+            if valid(p.ghost) and not p.ghostHidden and p.target then
+                game.hateGhost(actor, p.ghost, addr, x, y, z, p.number, p.target)
+                here[#here + 1] = { body = p.ghost, addr = p.ghostAddr, at = p.target, slot = p.number }
+            end
+        end
+        local _, pawn = getPlayer1()
+        if valid(pawn) and not game.isDead(pawn) and net.localLoc then
+            here[#here + 1] = { body = pawn, addr = pawn:GetAddress(), at = net.localLoc, slot = net.slot, mine = true }
+        end
+        if #here >= 2 then
+            game.steerPartyFocus(actor, addr, x, y, z, hp, here)
+        end
+    end
+
     -- Host, one enemy's turn: announce its death (reliably), or send where it is.
     local function shareEnemy(actor, addr, aggro)
         local name = enemyName(actor, addr)
@@ -616,7 +752,11 @@ return function(api)
                     x, y, z, yaw, vx == vx and vx or 0, vy == vy and vy or 0, hp, maxhp, boss,
                     posture ~= nil and string.format("%.1f", posture) or "-"))
             end
-            if aggro and valid(net.ghost) and game.hateGhost and not net.ghostHidden then
+            if net.party then
+                if aggro then
+                    aggroParty(actor, addr, x, y, z, hp)
+                end
+            elseif aggro and valid(net.ghost) and game.hateGhost and not net.ghostHidden then
                 game.hateGhost(actor, net.ghost, addr, x, y, z)
                 if not net.pvp then
                     local _, pawn = getPlayer1()
@@ -636,6 +776,9 @@ return function(api)
             sendEvent("D", id, string.format("%.1f", hpDamage), string.format("%.1f", postureDamage or 0),
                 lethal and "L" or "-")
             net.stats.hitsReported = (net.stats.hitsReported or 0) + 1
+            if net.party and hpDamage > 0 then
+                net.hitHere[id] = true      -- (see GK in syncEnemy)
+            end
         end
     end
 
@@ -824,8 +967,11 @@ return function(api)
                 net.stats.applied = net.stats.applied + 1
             end
             nextSeen[name] = { hp = hp, posture = posture, addr = addr }
-        elseif net.remoteEnemies[name] and not net.hostKilled[name] and not net.guestKillSent[name] then
-            -- It died here before the host had it loaded (we were far apart): the host's copy follows.
+        elseif (net.remoteEnemies[name] or net.hitHere[name]) and not net.hostKilled[name] and not net.guestKillSent[name] then
+            -- It died here before the host had it loaded (we were far apart): the host's copy follows. In a party so does
+            -- that of any guest near it. An enemy past the host's reach has no owner: it sleeps on the host, so each guest
+            -- by it fights a copy of its own, as a guest alone does, and the first to kill it kills it for everyone.
+            -- (Only one this player hit: a copy can read as dead for other reasons, and this would kill it everywhere.)
             net.guestKillSent[name] = true
             sendEvent("GK", name)
         end
@@ -849,8 +995,10 @@ return function(api)
         round.aggro = now >= (round.aggroAt or 0)
         if round.aggro then
             round.aggroAt = now + AGGRO_S
-            if valid(net.ghost) and game.healGhost then
-                game.healGhost(net.ghost, net.pvp)
+            for _, p in ipairs(partners()) do
+                if valid(p.ghost) and game.healGhost then
+                    game.healGhost(p.ghost, net.pvp)
+                end
             end
         end
     end
@@ -890,9 +1038,13 @@ return function(api)
             return
         end
         if isHost() then
-            local t = net.target
-            local near = t ~= nil and not net.ghostHidden and gap3d(origin, t) <= PARTNER_REACH_CM
-            updateReach(origin, near and t or nil, dt)
+            if net.party then
+                updateReach(origin, nil, dt, guestsNear(origin))
+            else
+                local t = net.target
+                local near = t ~= nil and not net.ghostHidden and gap3d(origin, t) <= PARTNER_REACH_CM
+                updateReach(origin, near and t or nil, dt)
+            end
             if round.at > #round.queue and now - round.startedAt >= ENEMY_ROUND_S then
                 startHostRound(now)
             end
@@ -975,15 +1127,26 @@ return function(api)
     handlers.GK = function(name)
         if isHost() and name then
             net.guestKilled[name] = true
+        elseif name and net.party then
+            net.guestKillSent[name] = true          -- another guest's kill, of an enemy the host doesn't run: see syncEnemy
+            handlers.K(name)
         end
     end
 
     -- The partner has just (re)started sync: it knows nothing yet. It hears again what enemies are, and what's dead.
-    handlers.S = function()
+    handlers.S = function(_, from)
         log("The other player started sync.")
         net.announced = {}
         net.enemyNames = {}
-        if isHost() then
+        if isHost() and from then
+            -- One guest of a party: the others know all this, and what's new to them is what that one holds.
+            sendTo(from, "Y", hostWorld)
+            for name in pairs(net.deadSent) do
+                sendTo(from, "K", name)
+            end
+            net.fightToldAt = 0
+            sendEvent("J", from)
+        elseif isHost() then
             sendEvent("Y", hostWorld)
             for name in pairs(net.deadSent) do
                 sendEvent("K", name)
@@ -991,6 +1154,7 @@ return function(api)
         else
             net.hostKilled = {}
             net.guestKillSent = {}
+            net.hitHere = {}
         end
     end
 
@@ -1049,7 +1213,10 @@ return function(api)
         end
     end
 
-    handlers.D = function(rest)
+    -- from: the slot of the guest who hit it, with more than two players, or nil. Where they are is peerOf(from).target, which
+    -- with two players is net.target: anything that asks where "the guest" is must go by that, not by net.target, which in a
+    -- host's party is only its first guest here.
+    handlers.D = function(rest, from)
         local name, amount, posture, lethal = rest:match("^(%S+) (%S+)%s*(%S*)%s*(%S*)")
         -- Checked before anything else: a real number in range (the lethal flag below can't smuggle in more).
         amount = num(amount)
@@ -1064,12 +1231,13 @@ return function(api)
         end
         if isHost() and name then
             local actor = enemyByName[name]
-            if valid(actor) and game.applyDamage and net.target
-                and gap3d(actor:K2_GetActorLocation(), net.target) <= OWN_HIT_CM then
+            local hitter = peerOf(from).target
+            if valid(actor) and game.applyDamage and hitter
+                and gap3d(actor:K2_GetActorLocation(), hitter) <= OWN_HIT_CM then
                 local wasAlive = not (game.isDead and game.isDead(actor))
                 local boss = net.partnerBosses[name] or (game.isBoss and game.isBoss(actor))
                 game.applyDamage(actor, amount, posture)
-                game.partnerHit(actor:GetAddress())
+                game.partnerHit(actor:GetAddress(), from)
                 if wasAlive and game.isDead and game.isDead(actor) then
                     if game.rollLoot then
                         payKillLoot(name, actor)
@@ -1114,17 +1282,17 @@ return function(api)
 
     -- What the game gave the partner. Played with nobody in the world (a map loading) it waits.
     local giftsWaiting = {}
-    handlers.T = function(rest)
+    handlers.T = function(rest, from)
         local id, count, kind = rest:match("^(%S+) (%d+) (%S+)$")
         count = num(count)
         if id and #id <= MAX_ITEM_NAME and count and count >= 1 and count <= MAX_GIFT then
-            giftsWaiting[#giftsWaiting + 1] = { id = id, count = count, kind = kind ~= "-" and kind or nil }
+            giftsWaiting[#giftsWaiting + 1] = { id = id, count = count, kind = kind ~= "-" and kind or nil, from = from }
         end
     end
 
     local function takeGifts(pawn)
         for _, gift in ipairs(giftsWaiting) do
-            game.receiveGift(pawn, gift.id, gift.count, gift.kind)
+            game.receiveGift(pawn, gift.id, gift.count, gift.kind, net.party and (gift.from or 1) or nil)
             if gift.kind == "accessory" or gift.kind == "medicine" then
                 api.status.notify("gift", "your partner found something: you have it too.")    -- (these come with no popup)
             end
@@ -1148,9 +1316,10 @@ return function(api)
 
     ------------------------------------------------------------------ bells and currency
 
-    handlers.H = function(tag)
-        if valid(net.ghost) and game.playHitReaction and tag and tag ~= "" then
-            game.playHitReaction(net.ghost, tag)
+    handlers.H = function(tag, from)
+        local ghost = peerOf(from).ghost
+        if valid(ghost) and game.playHitReaction and tag and tag ~= "" then
+            game.playHitReaction(ghost, tag)
         end
     end
 
@@ -1164,6 +1333,8 @@ return function(api)
         net.partnerBosses = {}
         net.hostKilled = {}
         net.hostBosses = {}
+        net.hitHere = {}
+        net.fightOf = {}
         net.joinedBoss = nil
         reopenFog()
         if game.resetBosses then
@@ -1267,13 +1438,13 @@ return function(api)
 
     -- A boss fight on the other PC: the same boss here, and this player beside it. Anyone outside the fog would stand
     -- at a closed wall with the fight on the other side.
-    local function joinBossFight(name)
+    local function joinBossFight(name, p)
         local _, pawn = getPlayer1()
-        local at = game.spawnBoss and game.spawnBoss(name) or net.target
+        local at = game.spawnBoss and game.spawnBoss(name) or p.target
         if game.refreshEnemyIds then
             game.refreshEnemyIds(true)
         end
-        if not at or not valid(pawn) or game.isDead(pawn) or net.ghostHidden == nil then
+        if not at or not valid(pawn) or game.isDead(pawn) or p.ghostHidden == nil then
             return
         end
         -- Just respawned: the partner's fight goes on without being dragged back into it, which killed the player again.
@@ -1288,12 +1459,37 @@ return function(api)
         end
     end
 
+    -- With more than two players, who F3 goes to: the nearest on this map who's up. If nobody is, a guest goes to the host
+    -- and a host to its first guest who's up: those are the maps the relay can name. Nil with two players, or nobody to go to.
+    local function nearestPartner()
+        if not net.party then
+            return nil
+        end
+        local from, best, bestGap, elsewhere = net.localLoc, nil, math.huge, nil
+        for _, p in ipairs(partners()) do
+            local t = p.target
+            if t and not p.partnerGone and t.Hp and t.Hp > 0 and not t.Cine then
+                if from and t.Map == net.localMap then
+                    local d = gap3d(from, t)
+                    if d < bestGap then
+                        best, bestGap = p, d
+                    end
+                else
+                    elsewhere = elsewhere or p
+                end
+            end
+        end
+        return best or elsewhere
+    end
+
     -- This player goes to the partner, on this map or another: a friend on a new save could never walk to a host deep in
     -- the story, and a door only the other world has opened would keep them apart. Says why not, or nil once on the way.
-    local function joinPartner()
+    -- p: who, in a party (no one named: the host, or the host's first guest here).
+    local function joinPartner(p)
+        p = p or net
         local controller, pawn = getPlayer1()
-        local t = net.target
-        if not (net.enabled and t and valid(pawn)) or net.partnerGone or net.ghostHidden == nil then
+        local t = p.target
+        if not (net.enabled and t and valid(pawn)) or p.partnerGone or p.ghostHidden == nil then
             return "no partner to go to yet."
         end
         if game.isDead(pawn) or (game.inCutscene and game.inCutscene()) or net.pvp or game.bossFightActive()
@@ -1313,7 +1509,7 @@ return function(api)
             end
             return nil
         end
-        local level = (link.status() or ""):match("partner_map=(%S+)")
+        local level = (link.status() or ""):match((p.number and p ~= net) and (" map" .. p.number .. "=(%S+)") or "partner_map=(%S+)")
         if not level or level == "-" or level == "?" then
             return "your partner's map isn't known yet."
         end
@@ -1356,7 +1552,7 @@ return function(api)
         if net.rejoinAt and os.clock() >= net.rejoinAt then
             net.rejoinAt = nil
             for name in pairs(net.hostBosses) do
-                joinBossFight(name)
+                joinBossFight(name, net)
             end
         end
         -- The boss is dead and the partner has gone back to the map: don't leave this player stranded in the arena.
@@ -1386,10 +1582,13 @@ return function(api)
         end
     end
 
-    handlers.B = function(name)
+    handlers.B = function(name, from)
         log("The other player started a boss fight with " .. name .. ".")
         net.partnerBosses[name] = true
-        joinBossFight(name)
+        if net.party then
+            net.fightOf[name] = from or 1
+        end
+        joinBossFight(name, peerOf(from))
         if net.role == "client" then
             net.hostBosses[name] = true
         end
@@ -1559,28 +1758,69 @@ return function(api)
         end
     end
 
-    -- Where to show the partner this frame.
-    local function readPartner()
-        local x, y, z, yaw, vx, vy, vz, hp, maxhp, map, flags, silenceMs = link.partner()
+    -- Where to show that player this frame.
+    local function heard(p, x, y, z, yaw, vx, vy, vz, hp, maxhp, map, flags, silenceMs)
         if x == nil then
             return
         end
         local clock = os.clock()
         local heardAt = clock - silenceMs / 1000
-        if net.lastRemoteAt and clock - net.lastRemoteAt >= GAP_LOG_S and silenceMs / 1000 < GAP_LOG_S then
-            log(string.format("No packet for %.1f s.", clock - net.lastRemoteAt))
+        if p.lastRemoteAt and clock - p.lastRemoteAt >= GAP_LOG_S and silenceMs / 1000 < GAP_LOG_S then
+            log(string.format("No packet for %.1f s.", clock - p.lastRemoteAt))
         end
-        net.lastRemoteAt = heardAt
-        local t = net.target or {}
+        p.lastRemoteAt = heardAt
+        local t = p.target or {}
         t.X, t.Y, t.Z, t.Yaw, t.VX, t.VY, t.VZ = x, y, z, yaw, vx, vy, vz
         t.Hp, t.MaxHp = hp, maxhp
         t.Map = map ~= 0 and map or nil
         t.Grounded, t.Cine, t.Falling, t.Climbing = flags & 1 ~= 0, flags & 2 ~= 0, flags & 4 ~= 0, flags & 8 ~= 0
-        net.target = t
+        p.target = t
         -- (No ghost before we have a player ourselves: menus, loading screens.)
-        if not valid(net.ghost) and clock >= (net.ghostTryAt or 0) and valid(select(2, getPlayer1())) then
-            net.ghostTryAt = clock + 1.0
-            spawnGhost()
+        if not valid(p.ghost) and clock >= (p.ghostTryAt or 0) and valid(select(2, getPlayer1())) then
+            p.ghostTryAt = clock + 1.0
+            spawnGhost(p)
+        end
+    end
+
+    local function hearPlayer(slot, x, ...)
+        if x ~= nil then
+            heard(peerOf(slot), x, ...)
+        end
+    end
+
+    -- A host's party has no one partner, so net stands for its first guest who's here, for what only asks if someone is. One on
+    -- this map if there is one.
+    local function followLead()
+        local lead, here = nil, nil
+        for _, p in ipairs(net.peerList) do
+            if p.target and not p.partnerGone then
+                lead = lead or p
+                if not here and p.target.Map == net.localMap then
+                    here = p
+                end
+            end
+        end
+        lead = here or lead or net.peerList[1]
+        if lead then
+            net.lead = lead
+            net.target, net.ghost, net.ghostHidden, net.lastRemoteAt = lead.target, lead.ghost, lead.ghostHidden, lead.lastRemoteAt
+            net.partnerGone = lead.partnerGone == true
+        end
+    end
+
+    local function readPartner()
+        if net.slot ~= 1 then
+            heard(net, link.partner())
+        end
+        if net.party then
+            for slot = 2, net.party do
+                if slot ~= net.slot then
+                    hearPlayer(slot, link.player(slot))
+                end
+            end
+            if net.slot == 1 then
+                followLead()
+            end
         end
     end
 
@@ -1601,6 +1841,8 @@ return function(api)
         net.partnerBosses = {}
         net.hostKilled = {}
         net.hostBosses = {}
+        net.hitHere = {}
+        net.fightOf = {}
         net.healTicks = {}
         net.hostSeen = {}
         enemyByName = {}
@@ -1609,16 +1851,85 @@ return function(api)
         reach.near = {}
     end
 
-    local function destroyGhost()
-        if valid(net.ghost) then
-            net.ghost:K2_DestroyActor()
+    local function destroyGhost(p)
+        if valid(p.ghost) then
+            p.ghost:K2_DestroyActor()
         end
-        net.ghost = nil
-        net.ghostCmc = nil
-        net.ghostHidden = nil
-        net.ghostGliding = false
-        net.zeroSince = nil
-        net.awaySince = nil
+        p.ghost = nil
+        p.ghostCmc = nil
+        p.ghostHidden = nil
+        p.ghostGliding = false
+        p.zeroSince = nil
+        p.awaySince = nil
+    end
+
+    local function destroyGhosts()
+        for _, p in ipairs(partners()) do
+            destroyGhost(p)
+        end
+    end
+
+    -- Two players again, or a new start: the other players go, with their ghosts. A guest's host, net, stays.
+    local function leaveParty()
+        if net.party == nil and next(net.peers) == nil then
+            return
+        end
+        for _, p in pairs(net.peers) do
+            destroyGhost(p)
+        end
+        if net.slot == 1 then
+            net.target, net.ghost, net.ghostHidden, net.lastRemoteAt, net.partnerGone = nil, nil, nil, nil, false
+        end
+        net.peers, net.peerList, net.ghostSlots = {}, nil, {}
+        net.party, net.slot, net.number, net.lead, net.watched, net.fights = nil, nil, nil, nil, nil, nil
+        net.partnerFighting = false
+    end
+
+    local function enterParty(players, slot)
+        net.party, net.slot = players, slot
+        net.peerList = {}
+        if slot ~= 1 then
+            net.number, net.lead, net.fights = 1, net, net.partnerFighting
+            net.peerList[1] = net
+            if net.ghostAddr then
+                net.ghostSlots[net.ghostAddr] = 1
+            end
+        end
+        for _, p in pairs(net.peers) do         -- (a tagged event can get here ahead of the hello that says it's a party)
+            net.peerList[#net.peerList + 1] = p
+        end
+        table.sort(net.peerList, function(a, b) return a.number < b.number end)
+        log("More than two players (beta): up to " .. players .. ", and you're number " .. slot .. ".")
+        if api.pvp and api.pvp.on then
+            api.pvp.set(false)
+            api.status.notify("pvp", "PvP is off with more than two players.")
+        end
+    end
+
+    -- What the host's relay says. It can only change as a guest hears a host's hello, or a relay starts.
+    local function watchParty()
+        local players, slot = nil, nil
+        if link.party then
+            players, slot = link.party()
+        end
+        players, slot = players and math.floor(players), slot and math.floor(slot)
+        if players ~= net.party or slot ~= net.slot then
+            if net.party then
+                leaveParty()
+            end
+            if players then
+                enterParty(players, slot)
+            end
+        end
+    end
+
+    -- Everyone's boss bars, as one answer.
+    local function countFights()
+        local any = false
+        for _, p in ipairs(partners()) do
+            any = any or p.fights == true
+        end
+        net.partnerFighting = any
     end
 
     local function start(role)
@@ -1633,6 +1944,7 @@ return function(api)
         end
         net.role = role
         net.enabled = true
+        leaveParty()
         reopenFog()
         clearRemoteState()
         net.deadSent = {}
@@ -1641,6 +1953,7 @@ return function(api)
         if role == "host" then
             sendEvent("Y", hostWorld)
         end
+        watchParty()
         log("Online sync on as " .. role .. ".")
     end
 
@@ -1672,7 +1985,8 @@ return function(api)
             game.spectate(nil)
         end
         releaseHeld(nil)
-        destroyGhost()
+        destroyGhosts()
+        leaveParty()
         reopenFog()
         clearRemoteState()
         log("Online sync off.")
@@ -1696,6 +2010,13 @@ return function(api)
             local _, pawn = getPlayer1()
             local g = net.ghost:K2_GetActorLocation()
             log("Ghost at " .. fmtVec(g) .. (valid(pawn) and string.format(", %.0f cm from P1", distance(g, pawn:K2_GetActorLocation())) or ""))
+        end
+        if net.party then
+            log(string.format("Party: up to %d, you're number %d.", net.party, net.slot))
+            for _, p in ipairs(partners()) do
+                log(string.format("  player %d: ghost %s, %s, fighting %s", p.number, tostring(valid(p.ghost)),
+                    p.partnerGone and "gone" or p.ghostHidden and "hidden" or "here", tostring(p.fights == true)))
+            end
         end
     end
 
@@ -1725,20 +2046,49 @@ return function(api)
     -- Nothing from them for a while: they quit, crashed or lost the connection. Their ghost mustn't stand there
     -- frozen, and nothing may stay locked for a fight that's no longer happening (fog walls, held enemies).
     local PARTNER_GONE_S = 12.0   -- longer than a loading screen (respawn teleport, streaming), which is silent too
-    local function watchPartner()
-        local gone = net.lastRemoteAt ~= nil and os.clock() - net.lastRemoteAt >= PARTNER_GONE_S
-        if gone and not net.partnerGone then
-            net.partnerGone = true
-            log("Lost the other player (nothing heard for " .. PARTNER_GONE_S .. " s): fog walls opened, enemies are yours again.")
-            reopenFog()
-            releaseHeld(nil)
-            net.remoteEnemies = {}
-            seen = {}
-            updateGhostVisibility()
-        elseif not gone and net.partnerGone then
-            net.partnerGone = false
+    local function watchOnePartner(p)
+        local gone = p.lastRemoteAt ~= nil and os.clock() - p.lastRemoteAt >= PARTNER_GONE_S
+        if gone and not p.partnerGone then
+            p.partnerGone = true
+            p.fights = nil
+            -- What's left behind goes when the host does, or for a host when the last guest does.
+            local last = p == net
+            if net.slot == 1 then
+                last = true
+                for _, other in ipairs(partners()) do
+                    last = last and other.partnerGone == true
+                end
+            end
+            if last then
+                log("Lost the other player (nothing heard for " .. PARTNER_GONE_S .. " s): fog walls opened, enemies are yours again.")
+                reopenFog()
+                releaseHeld(nil)
+                net.remoteEnemies = {}
+                seen = {}
+            else
+                log("Lost player " .. p.number .. " (nothing heard for " .. PARTNER_GONE_S .. " s).")
+            end
+            if net.party then
+                countFights()
+                -- The walls closed for their fight. Others' bars don't say it's on: those are copies of the same one.
+                for name, whose in pairs(net.fightOf) do
+                    if whose == p.number and net.foggedBosses[name] then
+                        pcall(game.setBossFog, net.foggedBosses[name], false)
+                        net.foggedBosses[name], net.fightOf[name] = nil, nil
+                    end
+                end
+            end
+            updateGhostVisibility(p)
+        elseif not gone and p.partnerGone then
+            p.partnerGone = false
             log("The other player is back.")
-            updateGhostVisibility()
+            updateGhostVisibility(p)
+        end
+    end
+
+    local function watchPartner()
+        for _, p in ipairs(partners()) do
+            watchOnePartner(p)
         end
     end
 
@@ -1756,8 +2106,18 @@ return function(api)
 
     -- Whether the partner has a boss bar up: only their own game can say a fight is on. A boss nearby says nothing, and
     -- the saves can differ on which bosses are alive at all.
-    handlers.F = function(on)
-        net.partnerFighting = on == "1"
+    -- Someone new in a party: a fight that's on is news to them now, not at the next telling.
+    handlers.J = function()
+        net.fightToldAt = 0
+    end
+
+    handlers.F = function(on, from)
+        if net.party then
+            peerOf(from).fights = on == "1"
+            countFights()
+        else
+            net.partnerFighting = on == "1"
+        end
     end
 
     local function tellFight(now)
@@ -1778,6 +2138,16 @@ return function(api)
         end
     end
 
+    -- Who a joiner can watch: on this map, and in a party the one in the fight, who needn't be the host.
+    local function fightToWatch()
+        for _, p in ipairs(partners()) do
+            if (p.fights or not net.party) and valid(p.ghost) and not p.ghostHidden and p.target and p.target.Map == net.localMap then
+                return p
+            end
+        end
+        return nil
+    end
+
     -- A guest joining during a boss fight watches it as a player who's down does. From another map there's nothing to
     -- watch: they're told, and go when it's over. The body stays behind with nobody steering, and the ground under it
     -- unloads once the camera's gone: held in the air and kept alive till then, or it fell out of the world.
@@ -1787,6 +2157,12 @@ return function(api)
             if on and net.watchHeld and valid(pawn) and pawn.CharacterMovement.MovementMode ~= MOVE_NONE then
                 pawn.CharacterMovement:SetMovementMode(MOVE_NONE, 0)
             end
+            if on and net.watchHeld and net.party then
+                local p = fightToWatch()    -- (the one being watched can go down, with others still in it)
+                if p then
+                    game.spectate(p.ghost)
+                end
+            end
             return
         end
         net.watchingFight = on
@@ -1794,10 +2170,11 @@ return function(api)
             if api.status then
                 api.status.notify("join", "your partner is in a boss fight: you'll join them when it's over.")
             end
-            if valid(pawn) and valid(net.ghost) and not net.ghostHidden and net.target and net.target.Map == net.localMap then
+            local p = fightToWatch()
+            if valid(pawn) and p then
                 pawn.CharacterMovement:SetMovementMode(MOVE_NONE, 0)
                 game.setMinHealth(pawn, 1)
-                game.spectate(net.ghost)
+                game.spectate(p.ghost)
                 net.watchHeld = true
             end
         elseif net.watchHeld then
@@ -1812,14 +2189,33 @@ return function(api)
         end
     end
 
-    local function holdForFight(pawn, partnerUp)
+    -- Who a player who's down can watch: a partner here, one in the boss fight first, and the same one as long as that holds.
+    -- The second answer is who's in the fight. With two players that's only ever net, and the fight is net.partnerFighting.
+    local function upPartner()
+        local first, fighter = nil, nil
+        for _, p in ipairs(partners()) do
+            if valid(p.ghost) and not p.ghostHidden then
+                first = first or p
+                if p.fights then
+                    fighter = fighter or p
+                end
+            end
+        end
+        local stay = net.watched
+        if stay and valid(stay.ghost) and not stay.ghostHidden and (stay.fights or fighter == nil) then
+            return stay, fighter
+        end
+        return fighter or first, fighter
+    end
+
+    local function holdForFight(pawn, partnerUp, fighting)
         local now = os.clock()
         if not net.holdLooking or now < (net.holdLookAt or 0) then
             return
         end
         net.holdLookAt = now + HOLD_LOOK_S
         local mayWait = partnerUp and not net.pvp and now - net.deadSince < HOLD_MAX_S
-        if mayWait and net.partnerFighting then
+        if mayWait and fighting then
             if game.holdRespawn(pawn, true) and not net.holdTold then
                 net.holdTold = true
                 if api.status then
@@ -1849,14 +2245,23 @@ return function(api)
             if not game.spectate then
                 return
             end
-            local partnerUp = valid(net.ghost) and not net.ghostHidden
-            holdForFight(pawn, partnerUp)
-            if partnerUp and os.clock() - net.deadSince >= SPECTATE_AFTER_S and not game.isSpectating() then
-                if game.spectate(net.ghost) then
+            local up, fighter = upPartner()
+            local fighting = net.partnerFighting
+            if net.party then
+                fighting = fighter ~= nil   -- (someone who's down or elsewhere is no reason to wait)
+            end
+            holdForFight(pawn, up ~= nil, fighting)
+            if up and os.clock() - net.deadSince >= SPECTATE_AFTER_S and not game.isSpectating() then
+                if game.spectate(up.ghost) then
+                    net.watched = net.party and up or nil
                     log("You're down: watching the other player until you respawn.")
                 end
-            elseif not partnerUp and game.isSpectating() then
+            elseif up and net.party and up ~= net.watched and game.isSpectating() then
+                net.watched = up            -- the one being watched went down too
+                game.spectate(up.ghost)
+            elseif not up and game.isSpectating() then
                 game.spectate(nil)
+                net.watched = nil
                 log("The other player is down or gone too: camera back on you.")
             end
         else
@@ -1866,6 +2271,7 @@ return function(api)
             end
             if game.isSpectating and game.isSpectating() and not net.watchingFight then
                 game.spectate(nil)
+                net.watched = nil
                 log("Back on your feet: camera back on you.")
             end
         end
@@ -1899,7 +2305,7 @@ return function(api)
             nextSend = now + SEND_S
             runStage("sendPlayer", sendPlayer)
         end
-        runStage("steerGhost", steerGhost)
+        runStage("steerGhost", steerGhosts)
         runStage("enemyTurns", stageEnemyTurns)
         for name, fn in pairs(frameTicks) do
             runStage(name, fn)
@@ -1907,7 +2313,8 @@ return function(api)
         if now >= nextSlow then
             nextSlow = now + SLOW_S
             runStage("watchSlowly", stageWatchSlowly)
-            runStage("visibility", updateGhostVisibility)
+            runStage("party", watchParty)
+            runStage("visibility", updateVisibility)
             runStage("watchOwnDeath", watchOwnDeath)
             runStage("watchPartner", watchPartner)
         end
@@ -1945,6 +2352,19 @@ return function(api)
         restListeners = restListeners,
         isHost = isHost,
         localPawn = localPawn,
+        partners = partners,
+        peerOf = peerOf,
+        players = PLAYERS,
+        nearestPartner = nearestPartner,
+        watchParty = watchParty,
+        -- The body standing for that slot on this PC: this player's own, or a ghost.
+        playerBody = function(slot)
+            if slot == net.slot then
+                return select(2, getPlayer1())
+            end
+            local p = slot == 1 and net or net.peers[slot]
+            return p and p.ghost
+        end,
         sendEvent = sendEvent,
         announceBoss = announceBoss,
         reportHit = reportHit,
@@ -1960,7 +2380,7 @@ return function(api)
                     return
                 end
                 net.ghostMode = mode
-                destroyGhost()
+                destroyGhosts()
                 log("Ghost look: " .. mode)
             end,
         },

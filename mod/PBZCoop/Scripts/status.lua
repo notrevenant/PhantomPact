@@ -129,11 +129,43 @@ return function(api)
         end
     end
 
+    -- More than two players: who's come or gone, and how many that makes. (EXACG's tips, PR #11.) The first look only takes
+    -- note of who's here.
+    local function watchParty()
+        if not net.party then
+            status.here = nil
+            return
+        end
+        local here, players = {}, 1
+        for _, p in ipairs(coop.partners()) do
+            if p.lastRemoteAt and not p.partnerGone then
+                here[p.number] = true
+                players = players + 1
+            end
+        end
+        local before = status.here
+        status.here = here
+        if before then
+            local size = string.format(" %d players now.", players)
+            for slot in pairs(here) do
+                if not before[slot] then
+                    notify("party" .. slot, coop.players[slot].name .. " joined." .. size)
+                end
+            end
+            for slot in pairs(before) do
+                if not here[slot] then
+                    notify("party" .. slot, coop.players[slot].name .. " left." .. size)
+                end
+            end
+        end
+    end
+
     local function poll()
         local s = readStatus()
         if s == nil then
             return
         end
+        watchParty()
         local last = status.last
         net.rttMs = tonumber(s.rtt_ms)
         if last.role == nil then
@@ -168,6 +200,14 @@ return function(api)
                     .. ": both PCs need the same version.")
             else
                 notify("version", "your partner is on Phantom Pact " .. theirs .. " and you're on " .. api.version
+                    .. ": use the same version, or enemies won't stay in step.")
+            end
+        end
+
+        -- A host's guests, each: only the first of them speaks for the connection above.
+        if s.other_versions and s.other_versions ~= last.other_versions then
+            for slot, version in s.other_versions:gmatch("(%d):([^,]+)") do
+                notify("version" .. slot, "player " .. slot .. " is on Phantom Pact " .. version .. " and you're on " .. tostring(api.version)
                     .. ": use the same version, or enemies won't stay in step.")
             end
         end

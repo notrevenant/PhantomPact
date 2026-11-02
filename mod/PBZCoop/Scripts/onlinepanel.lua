@@ -5,6 +5,7 @@
 
 return function(api)
     local log, valid, hud, game, kit = api.log, api.valid, api.hud, api.game, api.panel.kit
+    local save = kit.save
 
     local KEY_MS = 40               -- how often F5 is looked at; a press lasts longer
     local TICK_MS = 15
@@ -32,11 +33,13 @@ return function(api)
     local OPTION_X, OPTION_STEP = 300, 136
     -- The gameplay options: a row per setting, top to bottom on the settings page.
     local ROWS = {
-        { name = "teleport", y = 104, choices = { "off", "on" } },
-        { name = "pvp", y = 228, choices = { "off", "on" } },
-        { name = "compass", y = 290, choices = { "off", "on" } },
-        { name = "mapicon", y = 352, choices = { "off", "on" } },
-        { name = "direct", y = 414, choices = { "off", "on" } },
+        { name = "teleport", y = 84, choices = { "off", "on" } },
+        { name = "pvp", y = 186, choices = { "off", "on" } },
+        { name = "compass", y = 237, choices = { "off", "on" } },
+        { name = "mapicon", y = 288, choices = { "off", "on" } },
+        { name = "direct", y = 339, choices = { "off", "on" } },
+        { name = "four", y = 390, choices = { "off", "on" } },
+        { name = "mode", y = 441, choices = { "multiplayer", "local" } },
     }
 
     local panel = { open = false }
@@ -48,48 +51,6 @@ return function(api)
     local words, wordsWidget, wordsAt, note, mouseAt = nil, nil, 0, nil, 0
 
     ------------------------------------------------------------------ PhantomPact.ini
-
-    -- Only these lines change: comments, the other settings and the file's line ends stay as they are.
-    local function save(values)
-        local path = api.modDir() .. "PhantomPact.ini"
-        local f = io.open(path, "rb")
-        local text = f and f:read("a") or ""
-        if f then
-            f:close()
-        end
-        local out, seen, at = {}, {}, 1
-        while at <= #text do
-            local stop = text:find("\n", at, true) or #text
-            local line = text:sub(at, stop)
-            local key = line:match("^%s*([%w_]+)%s*=")
-            for name, value in pairs(values) do
-                if key and key:lower() == name:lower() then
-                    line = name .. " = " .. value .. (line:match("\r?\n$") or "")
-                    seen[name] = true
-                end
-            end
-            out[#out + 1] = line
-            at = stop + 1
-        end
-        for name, value in pairs(values) do
-            if not seen[name] then
-                out[#out + 1] = name .. " = " .. value .. "\n"
-            end
-        end
-        local tmp = io.open(path .. ".tmp", "wb")
-        local wrote = tmp and tmp:write(table.concat(out))
-        if tmp then
-            tmp:close()
-        end
-        if not wrote then
-            log("Couldn't save PhantomPact.ini: this choice lasts until the game closes.")
-            return
-        end
-        os.remove(path)
-        if not os.rename(path .. ".tmp", path) then
-            log("Couldn't save PhantomPact.ini: see PhantomPact.ini.tmp in " .. api.modDir())
-        end
-    end
 
     -- Other network: any virtual LAN whose addresses the host's filter wouldn't know (ZeroTier, UU Accelerator).
     local function connectIn(settings)
@@ -116,10 +77,16 @@ return function(api)
             compass = onOff(s.partnercompass, "on"),
             mapicon = onOff(s.partnermapicon, "on"),
             direct = onOff(s.steamdirect, "off"),
+            four = onOff(s.fourplayers, "off"),
+            -- Only Role = Local is local: Off, Host and Guest, and a fresh install, are all multiplayer. Read each time this
+            -- page opens, as Host, Guest and Leave write Role too.
+            mode = (s.role or "off"):lower() == "local" and "local" or "multiplayer",
         }
     end
 
-    -- Kept in PhantomPact.ini, and in force at once. (Steam Direct from the next connection: the relay reads it as it starts.)
+    -- Kept in PhantomPact.ini, and in force at once. (Steam Direct and 4 players from the next connection: the relay reads
+    -- them as it starts. 4 players is the host's choice: a guest follows what the host's relay says. Mode from the next start
+    -- of the game: Role is read once, and local co-op can't be taken down live.)
     local function choose(row, value)
         options[row] = value
         local on = value == "on"
@@ -138,6 +105,14 @@ return function(api)
             api.mapicon.on = on
         elseif row == "direct" then
             save({ SteamDirect = word })
+        elseif row == "four" then
+            save({ FourPlayers = word })
+        elseif row == "mode" and value == "local" then
+            save({ Role = "Local" })
+            api.status.lastShown.mode = nil
+            api.status.notify("mode", "Local co-op starts the next time you start the game.")
+        elseif row == "mode" and ((api.online.settings() or {}).role or ""):lower() == "local" then
+            save({ Role = "Off" })          -- (never over a Host or Guest: this row only undoes Local)
         end
     end
 
@@ -181,6 +156,17 @@ return function(api)
             end
             if s.route and s.route ~= "-" then
                 text = text .. " Route: " .. s.route .. "."
+            end
+            if s.players then
+                local here = 1
+                for _, p in ipairs(api.coop.partners()) do
+                    here = here + ((p.lastRemoteAt and not p.partnerGone) and 1 or 0)
+                end
+                text = text .. " Players: " .. here .. " of " .. s.players .. "."
+                local me = api.coop.players[tonumber(s.slot)]
+                if me then
+                    text = text .. " You're " .. me.name .. "."
+                end
             end
             return text
         end
@@ -546,7 +532,7 @@ return function(api)
 
     panel.describe = describe       -- for tools/netlab/bench/online-panel.ps1
 
-    -- onlinepanel toggle|host|join|leave|steam|tailscale|other|press <x> <y>: what the keys and the mouse do, for tests.
+    -- onlinepanel toggle|host|join|leave|steam|tailscale|other|press <x> <y>|row <name>: what the keys and the mouse do, for tests.
     function panel.command(rest)
         local word, x, y = (rest or ""):match("^(%S*)%s*(%S*)%s*(%S*)")
         if word == "toggle" then
@@ -563,6 +549,8 @@ return function(api)
             press(r.x + 5, r.y + 5)
         elseif word == "press" then
             press(tonumber(x), tonumber(y))
+        elseif word == "row" then
+            log("Online panel row " .. x .. ": " .. tostring(options[x]))
         end
         log("Online panel " .. (panel.open and "open" or "closed") .. ", " .. choice.connect .. ": " .. describe())
     end

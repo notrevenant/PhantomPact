@@ -22,9 +22,11 @@ WORDS = {
                  ("PvP", "duel your partner; both must turn it on"),
                  ("Partner compass", "shows where your partner is"),
                  ("Partner on the map", "their mark on the game's map"),
-                 ("Steam Direct", "less delay, but your partner can see your IP")],
+                 ("Steam Direct", "less delay, but your partner can see your IP"),
+                 ("4 PLAYERS (Beta)", "host's choice: up to 3 guests. PvP stays off"),
+                 ("Mode", "local: split screen on this PC, from the next start")],
         "soon": "(Coming soon)",
-        "foot": ["Kept for the next start. Everything but Steam Direct works at once.",
+        "foot": ["Kept for next time. Steam Direct and 4 PLAYERS: next connection. Mode: next game start.",
                  "Difficulty is the game's own. With a partner, enemies always get more health."],
         "cards": {"online_steam": ("Steam", "friends, no setup"),
                   "online_tailscale": ("Tailscale", "also Hamachi, Radmin"),
@@ -33,7 +35,7 @@ WORDS = {
                   "online_password": ("Paste password", "optional, same for both"),
                   "online_password_set": ("Password set", "press to remove")},
         "buttons": {"host": "HOST", "join": "GUEST", "leave": "LEAVE", "settings": "MORE", "back": "BACK"},
-        "on": "ON", "off": "OFF",
+        "on": "ON", "off": "OFF", "multiplayer": "MULTIPLAYER", "local": "LOCAL",
     },
     "zh": {
         "prefix": "zh_", "face": chinese, "title": "联机合作", "status": "状态", "through": "连接方式",
@@ -49,9 +51,11 @@ WORDS = {
                  ("PvP", "与队友决斗,双方都要开启"),
                  ("队友指南针", "显示队友所在的方向"),
                  ("地图上的队友", "在游戏地图上显示队友的位置"),
-                 ("Steam 直连", "延迟更低,但队友能看到你的 IP")],
+                 ("Steam 直连", "延迟更低,但队友能看到你的 IP"),
+                 ("4 人模式(测试版)", "由房主决定:最多 3 名队友,PvP 关闭"),
+                 ("模式", "本地:同一台电脑分屏,下次启动生效")],
         "soon": "(即将推出)",
-        "foot": ["设置会保存到下次启动。除 Steam 直连外,其他设置立即生效。",
+        "foot": ["设置会保存。Steam 直连和 4 人模式下次连接时生效,模式下次启动游戏时生效。",
                  "难度使用游戏自己的设置。有队友时,敌人总会获得更多生命。"],
         "cards": {"online_steam": ("Steam", "好友联机,无需设置"),
                   "online_tailscale": ("Tailscale", "也适用于 Hamachi、Radmin"),
@@ -60,7 +64,7 @@ WORDS = {
                   "online_password": ("粘贴密码", "可不设,双方必须相同"),
                   "online_password_set": ("密码已设置", "按一下清除")},
         "buttons": {"host": "开房", "join": "加入", "leave": "离开", "settings": "更多", "back": "返回"},
-        "on": "开", "off": "关",
+        "on": "开", "off": "关", "multiplayer": "多人联机", "local": "本地分屏",
     },
 }
 
@@ -93,10 +97,10 @@ def settings_background(w_):
     corners(d, w, h)
     spaced(d, (w * K / 2, 42 * K), w_["settings"], f(25), BRIGHT, gap=7)
     d.line(((w / 2 - 170) * K, 67 * K, (w / 2 + 170) * K, 67 * K), fill=FAINT, width=K)
-    for y, (label, sub) in zip((124, 186, 248, 310, 372, 434), w_["rows"]):
+    for y, (label, sub) in zip((104, 155, 206, 257, 308, 359, 410, 461), w_["rows"]):
         d.text((40 * K, (y - 8) * K), label, font=f(15), fill=BRIGHT, anchor="lm")
         d.text((40 * K, (y + 11) * K), sub, font=f(11), fill=DIM, anchor="lm")
-    d.text((300 * K, 186 * K), w_["soon"], font=f(15), fill=DIM, anchor="lm")
+    d.text((300 * K, 155 * K), w_["soon"], font=f(15), fill=DIM, anchor="lm")
     for y, line in zip((505, 528), w_["foot"]):
         d.text((230 * K, y * K), line, font=f(13), fill=DIM, anchor="lm")
     save(img, w_["prefix"] + "online_settings_bg")
@@ -106,7 +110,14 @@ def option(name, text, face=font, w=124, h=40):
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(26, 27, 31, 240))
     frame(d, w, h)
-    spaced(d, (w * K / 2, h * K / 2), text, face(13), BRIGHT, gap=2)
+    # A long word closes up, then shrinks, to stay inside the frame. (The short ones never get here.)
+    size, gap = 13, 2
+    while sum(d.textlength(c, font=face(size)) for c in text) + gap * K * (len(text) - 1) > (w - 14) * K and (gap or size > 9):
+        if gap:
+            gap -= 1
+        else:
+            size -= 1
+    spaced(d, (w * K / 2, h * K / 2), text, face(size), BRIGHT, gap=gap)
     save(img, name)
 
 
@@ -126,6 +137,8 @@ def worded(w_):
     button(prefix + "online_back", buttons["back"], face=face)
     option(prefix + "opt_off", w_["off"], face)
     option(prefix + "opt_on", w_["on"], face)
+    option(prefix + "opt_multiplayer", w_["multiplayer"], face)
+    option(prefix + "opt_local", w_["local"], face)
 
 
 if __name__ == "__main__":

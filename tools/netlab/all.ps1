@@ -45,6 +45,20 @@ Step 'lua check' {
     if ($LASTEXITCODE -ne 0) { [void]$failed.Add('lua check') }
 }
 
+Step 'events' {
+    python -I (Join-Path $PSScriptRoot 'eventcheck.py') | ForEach-Object { "  $_" }
+    if ($LASTEXITCODE -ne 0) { [void]$failed.Add('events') }
+}
+
+Step 'lua, four players' {
+    # Skipped on a PC with no Lua DLL (luasim.py says which it looks for).
+    $out = python -I (Join-Path $PSScriptRoot 'luasim.py') four
+    $code = $LASTEXITCODE
+    $out | Where-Object { $_ -match 'FAIL|No Lua DLL' } | ForEach-Object { "  $_" }
+    "  $(($out | Where-Object { $_ -match '^\s+ok ' }).Count) checks passed"
+    if ($code -ne 0 -and ($out -notmatch 'No Lua DLL')) { [void]$failed.Add('lua, four players') }
+}
+
 Step 'relay_cli test' {
     $out = & $cli test --port ($Port + 30)
     $code = $LASTEXITCODE
@@ -76,6 +90,12 @@ function Bench($name, $limit_ms, [hashtable]$link) {
 Step 'bench' {
     Bench 'clean link' 60 @{ Delay = 2; Jitter = 0 }
     Bench 'bad link' 320 @{ Delay = 40; Jitter = 20; Loss = 2; StallEvery = 3; StallMs = 250 }
+}
+
+Step 'bench, four players' {
+    $out = & (Join-Path $PSScriptRoot 'party-bench.ps1') -Seconds 8 -Cli $cli -Port ($Port + 38) -Work (Join-Path $private 'party')
+    $out | Where-Object { $_ -match '^(ok|FAIL)|^\s+(ok|FAIL)' } | ForEach-Object { "  $_" }
+    if ($LASTEXITCODE -ne 0) { [void]$failed.Add('bench, four players') }
 }
 
 Remove-Item -Recurse -Force $private -ErrorAction SilentlyContinue

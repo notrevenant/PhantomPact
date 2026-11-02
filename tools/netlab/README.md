@@ -14,6 +14,29 @@ runs two bots through a bad connection and prints true delays, since both share 
 processes: restarts, Secrets, an old partner, garbage, the sure lane at 5% and 30% loss. Bots bind to loopback only, so
 Windows' firewall doesn't ask anything.
 
+### Four players, and two players not changing
+
+    .\tools\netlab\party-bench.ps1 -Delay 20 -Jitter 5 -Loss 1
+    python -I tools\netlab\luasim.py four
+    python -I tools\netlab\luasim.py two <old mod\PBZCoop\Scripts>
+    .\tools\netlab\wirecheck.ps1 -Old <old native>
+    python -I tools\netlab\eventcheck.py
+
+`party-bench.ps1` is a host and three guests as separate processes, each guest through a bad connection of its own. `luasim.py`
+runs the mod's real Lua with no game: `sim\` is a stand-in for UE4SS, for the game and for the relay, one PC each, four in one
+process. `four` checks the rules. `two` plays one story, with PvP and Revive too, on an old version of the scripts and this one, and
+every game call, event and log line must match. `wirecheck.ps1` does that for the relay: every packet of a two-player session,
+byte for byte, against an old `native` folder. `eventcheck.py` is one handler per event name, and a handler for every event sent:
+a second handler on a name quietly drops the first, unless it keeps that one and calls it, as moves.lua does.
+
+`tools\mp-units.ps1` is the one check here that needs the game: on a developer install it puts several player units in a fight
+with the `units` command and reports whether enemies hate and hit them and whether the game's error panel appears. With two
+accounts, it's the only evidence from the real game for three or more.
+
+This PC has no Lua of its own, so `luasim.py` needs a Lua DLL: Cheat Engine's `lua53-64.dll` is what it looks for, or name one in
+`PP_LUA_DLL`. UE4SS has Lua 5.4, and the mod uses nothing that differs. The stand-in only knows what its author thought of: it
+finds wrong names, wrong order and wrong logic, not how the real game answers.
+
 ## Real game copies
 
 They run from a separate install, `C:\PBZDev`: junctions to the game's content, its own PBZ.exe, UE4SS, mod and saves. Never

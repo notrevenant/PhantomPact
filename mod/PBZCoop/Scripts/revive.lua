@@ -129,6 +129,7 @@ return function(api)
         local t = net.target
         return revive.on and fresh() and t.Map == net.localMap and t.Hp and t.Hp > 0 and not t.Cine
             and not net.partnerDowned and not (api.pvp and api.pvp.on) and not game.inCutscene()
+            and not net.party       -- (one partner to bring you back: it isn't built for more)
     end
 
     local function setVeto(on)

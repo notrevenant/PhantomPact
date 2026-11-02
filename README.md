@@ -28,9 +28,11 @@ share loot and dust, and rest at bells together. The host's world leads, and you
   partner while you're down
 - Optional `Secret` that signs every packet; works over Tailscale, Hamachi, Radmin, ZeroTier, UU Accelerator, and
   Steam (beta)
-- Local co-op (`Role = Local`, in testing): two players on one PC in split screen, one pad each or keyboard plus
+- Local co-op (F5 > MORE > Mode > LOCAL, in testing): two players on one PC in split screen, one pad each or keyboard plus
   pad, with player 2 climbing, opening chests, ringing bells, drinking from the gourd and fighting on their own
   ([docs/LOCAL_COOP.md](docs/LOCAL_COOP.md))
+- 4 players (beta): the host turns on 4 PLAYERS under MORE in the F5 panel, and up to three guests can join. Enemies and
+  bosses get 50% more health for each person connected ([INSTALL.md](INSTALL.md#4-players-beta))
 
 ## Quick start
 
@@ -40,14 +42,14 @@ share loot and dust, and rest at bells together. The host's world leads, and you
    `HostAddress` to the host's Tailscale IP.
 4. Start the game and load your saves, the host first. Co-op starts by itself. Or press F5 in the game for the online panel: Host or Guest with no text file.
 
-Early release, 2 players. Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
+Early release, 2 players (4 in beta). Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
 
 Both players must use the same version: 1.5.0 has a new connection, and 1.4.1 or older can't connect to it. No Python
 needed: the connection runs inside the game. Can't connect, or it feels laggy? See Connection problems in
 [INSTALL.md](INSTALL.md#connection-problems).
 
-For two players on one PC, set `Role = Local` instead and plug in two pads: it's in the same download, see
-[docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
+For two players on one PC, it's in the same download: press F5 in the game, then MORE > Mode > LOCAL, restart the game and
+plug in two pads (`Role = Local` in the ini does the same): see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
 
 ## Ground rules
 
@@ -79,6 +81,9 @@ For two players on one PC, set `Role = Local` instead and plug in two pads: it's
 - **[appdoze](https://github.com/appdoze)**, for the relay security review and code: packet signing, sender
   filtering, event value checks, faster sending, the settings handshake, in-game status tips, the partner on the map, enemies gliding back on the guest, and smoother partner
   movement
+- **[EXACG](https://github.com/EXACG)**, for the four-player design and code (PR #11): the host passing players on to
+  each other, a ghost, a compass dot and a map pointer for each partner, tips for each partner, enemy health that grows
+  with each player, the `units` check on the real game, and the check that every event has one handler
 - **Vercadi**, for UE4SS for Phantom Blade Zero, which made modding this game possible
 - **The UE4SS team** ([RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS))
 - **S-GAME and the game's developers** for Phantom Blade Zero

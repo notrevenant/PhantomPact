@@ -53,7 +53,8 @@ Header: marker 0xA3, protocol 3, flags (1 = from the host), session, the partner
 time in ms, the partner's time echoed back, how long we held it, sure-lane acknowledgement (next id expected, plus a bitmap
 of the 32 after it). Round trip comes from the echo, so no ping packets are needed.
 
-Sections follow: state (40 bytes), sure event, quick event, enemy line, hello (version, map, shared settings).
+Sections follow: state (40 bytes), sure event, quick event, enemy line, hello (version, map, shared settings), and with more than
+two players another player (a slot and 40 bytes).
 
 A session is the sender's clock in ms, always moving on, new per `link.reset()`, so a late packet of an older session can be
 told from a new start. A packet's sure and quick sections count only if its "partner's session" is ours.
@@ -64,6 +65,33 @@ Seeing a new session from the partner restarts both lanes and hands the mod an `
 `coop.lua`'s header lists them. `sendEvent` picks the lane: U, M, A and H are quick; the rest are sure.
 
 Enemy lines don't carry names: an `N` event gives each enemy a number first.
+
+## More than two players
+
+Only a host with `FourPlayers = On` runs this (`native/party.hpp`, written from EXACG's design in PR #11). It runs one `Relay` per
+guest on one socket, each with its own Mailbox for what goes out, so a guest's end is the same as with two players. Packets go to
+the Relay already talking to that address, else a free slot, else one silent for 3 s. All of it is on the relay thread.
+
+| | |
+|---|---|
+| Hello to a guest | adds `players=4` and `slot=<n>` |
+| What the game posts | copied to each guest's Mailbox, or one guest's (`link.send_to`) |
+| What a guest says | to the game as `@<slot> <event>`, and to the other guests the same way. `D` stays with the host |
+| Where a guest is | to the game by slot (`link.player`), and to the others in `SEC_PLAYER`, at most 60 times a second |
+| Status line | adds `players`, `slot`, `guests`, `turned_away`, `upload_kb_s`, `map<slot>`, `other_versions`. `mismatch` covers every guest |
+
+Three guests, bots on one PC:
+
+| | clean link | 40 ms delay, 20 ms jitter, 2% loss |
+|---|---|---|
+| Host sees a guest behind by, typically | 27 ms | 78 ms |
+| A guest sees another guest behind by, typically | 52 ms | 145 ms |
+| Host's upload, no enemies | 43 KB/s | |
+| With 8 enemies, 20 times a second | 62 KB/s | |
+| With 30 | 107 KB/s | |
+
+On the game thread four players cost about a third more calls into the game each frame than two: a ghost's place is read from
+memory, and a hidden ghost costs nothing (`luasim.py four` counts them).
 
 ## Testing
 

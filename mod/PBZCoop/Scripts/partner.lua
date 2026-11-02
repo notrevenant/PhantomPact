@@ -3,6 +3,8 @@
 -- (From appdoze's PR #5.) A guest goes to the host once, on joining. After that F3 goes to the partner, if TP > PARTNER
 -- is on (PartnerTeleport, off unless chosen: it's a lot of power to have on one key).
 -- Each player's death and respawn stay their own game's; there is no revive. Spectating is in coop.lua.
+-- With more than two players each one is watched the same way (EXACG's, PR #11), and the tips say who. F3 goes to the nearest
+-- partner who's up, and a guest's first trip is still to the host.
 
 return function(api)
     local log, valid = api.log, api.valid
@@ -14,8 +16,10 @@ return function(api)
     local FAR_CM = 15000            -- "far apart" above 150 m (same area)
     local KEY_MS = 40               -- how often F3 is looked at; a press lasts longer
     local LINK_WAIT_S = 120         -- from the link, a joining guest has this long to reach the host (a cutscene may be on)
+    local TOLD_WAIT_S = 2.5         -- with more than two players it waits this long first, to hear of a fight anyone's in
 
     local partner = { down = false, zeroReads = 0, far = false, cine = false }
+    local players = {}              -- with more than two: slot -> the same four, for that player
     local nextPoll = 0
     local wasKey = false
 
@@ -32,6 +36,55 @@ return function(api)
             and os.clock() - net.lastRemoteAt <= FRESH_S
     end
 
+    local function checkPlayer(p)
+        local t = p.target
+        if not (t and t.MaxHp and t.MaxHp > 0 and t.Hp and p.lastRemoteAt) or p.partnerGone
+            or os.clock() - p.lastRemoteAt > FRESH_S then
+            return
+        end
+        local who = players[p.number]
+        if who == nil then
+            who = { down = false, zeroReads = 0, far = false, cine = false }
+            players[p.number] = who
+        end
+        local key = "player" .. p.number
+        local name = coop.players[p.number].name
+        if t.Hp <= 0 then
+            who.zeroReads = who.zeroReads + 1
+            if who.zeroReads >= 2 and not who.down then
+                who.down = true
+                tip(key, name .. " is down.")
+            end
+            return
+        end
+        who.zeroReads = 0
+        if who.down then
+            who.down = false
+            tip(key, name .. " is back.")
+            return
+        end
+        if t.Cine ~= who.cine then
+            who.cine = t.Cine
+            if t.Cine then
+                tip(key, name .. " is watching a cutscene.")
+            end
+        end
+        local otherMap = t.Map ~= nil and net.localMap ~= nil and t.Map ~= net.localMap
+        if otherMap and not who.otherMap then
+            tip(key, name .. " is on another map.")
+        end
+        who.otherMap = otherMap
+        local l = net.localLoc
+        if l and t.Map ~= nil and t.Map == net.localMap then
+            local d = math.sqrt((l.X - t.X) ^ 2 + (l.Y - t.Y) ^ 2)
+            local far = d > FAR_CM
+            if far and not who.far then
+                tip(key, string.format("%s is %d m away.", name, math.floor(d / 100)))
+            end
+            who.far = far
+        end
+    end
+
     -- Down after two reads in a row at 0 health (one bad read during a teleport isn't "down"); back when health
     -- returns.
     local function check()
@@ -45,12 +98,14 @@ return function(api)
         if partner.joining then
             partner.joining = false
             partner.goUntil = os.clock() + LINK_WAIT_S
+            coop.watchParty()               -- (the host's hello comes with its first position: this frame can't have seen it)
+            partner.goFrom = net.party and os.clock() + TOLD_WAIT_S or 0
         end
         if partner.goUntil and net.partnerFighting then
             -- Not into the middle of a boss fight: it's watched, and the trip made when it's over, whoever won.
             partner.goUntil = os.clock() + LINK_WAIT_S
             coop.watchFight(true)
-        elseif partner.goUntil then
+        elseif partner.goUntil and os.clock() >= partner.goFrom then
             coop.watchFight(net.watchingFight == true)      -- (held till the trip: they may have to get up first)
             if os.clock() > partner.goUntil then
                 partner.goUntil = nil
@@ -60,6 +115,12 @@ return function(api)
                 partner.goUntil = nil
                 coop.watchFight(false)
             end
+        end
+        if net.party then
+            for _, p in ipairs(coop.partners()) do
+                checkPlayer(p)
+            end
+            return
         end
         if t.Hp <= 0 then
             partner.zeroReads = partner.zeroReads + 1
@@ -120,7 +181,7 @@ return function(api)
             tip("join", "TP > PARTNER is off. Turn it on in MORE (F5).")
             return
         end
-        local why = coop.joinPartner()
+        local why = coop.joinPartner(coop.nearestPartner())
         if why then
             api.status.lastShown.join = nil     -- (a press deserves its answer, however soon after the last)
             tip("join", why)

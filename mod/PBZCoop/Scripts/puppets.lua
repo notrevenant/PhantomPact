@@ -2,7 +2,8 @@
 -- their positions and health were pulled together, so two players never saw the same fight.
 --
 -- A copy the host lists has its AI stopped and follows the host's position here. Whatever the host's enemy starts
--- goes as "A <enemy> <ability class|-> <montage path|-> <position> <who it's aimed at>". An ability replays for real, so its hits land
+-- goes as "A <enemy> <ability class|-> <montage path|-> <position> <who it's aimed at>": host, guest or -, or with more than
+-- two players a slot or -. An ability replays for real, so its hits land
 -- on the guest and guard, parry and dodge work as usual; a montage alone (hit reactions) deals no damage. Montages
 -- the game builds at run time (turns) have no path to send and are left out.
 
@@ -71,7 +72,7 @@ return function(api)
             path = api.moves.allowedPath(path) and path or nil
             if ability or path then
                 coop.sendEvent("A", name, ability or "-", path or "-", string.format("%.2f", pos),
-                    game.enemyAfter(actor, net.ghost))
+                    net.party and game.enemyAfterSlot(actor, net.ghostSlots) or game.enemyAfter(actor, net.ghost))
                 puppets.attacks = puppets.attacks + 1
             end
         end
@@ -138,6 +139,9 @@ return function(api)
         if after ~= "-" then
             local _, pawn = api.getPlayer1()
             local aim = after == "guest" and pawn or net.ghost
+            if net.party then
+                aim = coop.playerBody(tonumber(after))
+            end
             if valid(aim) then
                 game.aimCopy(actor, actor:GetAddress(), aim)
             end

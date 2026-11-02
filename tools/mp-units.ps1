@@ -1,0 +1,84 @@
+<#
+.SYNOPSIS
+    Does Phantom Blade Zero allow several player units in one fight? Two accounts can only ever show one partner, so this is the
+    only evidence from the real game for three or more. (EXACG's, PR #11.)
+
+    Spawns copies of player 1 around them (the mod's own "units <n>" command), with a thug beside them, and reads the answer out
+    of the mod log: units the game accepted, units still alive, enemies that took each unit onto their hatred list, units that
+    took damage, and whether the game's own error panel appeared. It needs a developer install (dev.txt). Nothing here touches
+    the network: run it in single player, on a test save.
+
+.PARAMETER Counts
+    How many units to try, in order. Default 1,3: one extra unit, what co-op already does with a ghost, and three, a full party.
+
+.PARAMETER Settle
+    Seconds to wait after spawning before reading the result, so enemies have time to fight the units.
+
+.EXAMPLE
+    .\tools\mp-units.ps1 -GameWin64 C:\PBZDev\PBZ\platform\steam
+    .\tools\mp-units.ps1 -Counts 3,5 -Settle 15
+#>
+param(
+    [int[]]$Counts = @(1, 3),
+    [double]$Settle = 8,
+    [string]$Enemy = 'BP_Monster_MaleThug_Sword_Blue',
+    [string]$GameWin64
+)
+
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'find-game.ps1')
+if (-not $GameWin64) {
+    $GameWin64 = Find-PbzGame
+    if (-not $GameWin64) { throw "Phantom Blade Zero wasn't found in your Steam libraries. Run again with -GameWin64 '<Steam library>\steamapps\common\PBZ\platform\steam'." }
+}
+. (Join-Path $PSScriptRoot 'mod-link.ps1') -GameWin64 $GameWin64 -ProcessName 'PBZ'
+
+if (-not (Wait-Gameplay -TimeoutSec 120)) {
+    throw "The game never reported player 1. Load a save, get into gameplay, and run this again."
+}
+
+function Send-And-Read([string]$Command, [double]$Wait) {
+    $t0 = Get-Date
+    Send-ModCommand $Command
+    Start-Sleep -Milliseconds ([int]($Wait * 1000))
+    @(Get-ModLog -Since $t0 -Last 400 | Where-Object { $_ -match 'units|Spawned|error panel' } |
+        ForEach-Object { $_ -replace '^.*?\[PBZCoop\] ', '' })
+}
+
+$verdicts = @()
+foreach ($n in $Counts) {
+    Write-Output "`n== $n extra unit(s)"
+    Send-And-Read 'units 0' 0.6 | Out-Null
+    # One thug, so the units are in a real fight and not standing in an empty field. (Not one per count: a leftover thug from
+    # the last round would make the next round's numbers read differently.)
+    if ($n -eq $Counts[0]) {
+        Send-And-Read "spawnenemy $Enemy 400" 1.5 | Out-Null
+    }
+    $spawn = Send-And-Read "units $n" 2.0
+    $spawn | ForEach-Object { Write-Output "  $_" }
+    if (($spawn -join ' ') -match 'units is off') { throw 'units is off: this install has no dev.txt. Use a developer install (tools\install-mod.ps1).' }
+    Start-Sleep -Seconds $Settle
+    $after = Send-And-Read 'units' 2.0
+    $after | ForEach-Object { Write-Output "  $_" }
+
+    $alive = 0
+    if (($after -join ' ') -match 'units: \d+ spawned, (\d+) alive') { $alive = [int]$Matches[1] }
+    $damaged = 0
+    if (($after -join ' ') -match '(\d+) took damage') { $damaged = [int]$Matches[1] }
+    $hated = 0
+    if (($after -join ' ') -match '(\d+) hated by an enemy') { $hated = [int]$Matches[1] }
+    $panel = ($after -join ' ') -match 'error panel: VISIBLE'
+    $ok = ($alive -eq $n) -and -not $panel
+    $verdicts += [pscustomobject]@{ Units = $n; Alive = $alive; Damaged = $damaged; Hated = $hated; Panel = $panel; Ok = $ok }
+    Write-Output ("  => " + $(if ($ok) { "PASS" } else { "FAIL" }) + ": $alive/$n alive, $hated hated, $damaged damaged" +
+        $(if ($panel) { ", the game's error panel is up" } else { "" }))
+    Send-And-Read 'units 0' 0.6 | Out-Null
+}
+
+Write-Output "`n== result"
+$verdicts | Format-Table -AutoSize | Out-String | Write-Output
+if (@($verdicts | Where-Object { -not $_.Ok }).Count -eq 0) {
+    Write-Output "All counts held: the game takes this many player units in one fight."
+} else {
+    Write-Output "At least one count failed: this is a limit in the game, and it comes before anything in the network."
+}
