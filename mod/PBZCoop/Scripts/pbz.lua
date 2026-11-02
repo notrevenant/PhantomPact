@@ -1702,19 +1702,26 @@ return function(api)
     end
 
     -- A hidden ghost is nobody to fight: the partner's down, gone or elsewhere, and enemies swung at thin air. It comes off
-    -- every list, can't be put back, and each enemy that was after it looks again.
+    -- every list, can't be put back, and each enemy that was after it looks again. With nobody else on its list that look finds
+    -- no one and it keeps its target for good, swinging at the empty spot, so this player goes on the list first.
     function game.ghostInFight(ghost, inFight, enemies)
         pcall(function() ghost.BP_PBZHatredManagerComponent.CanBeHatredNow = inFight end)
         if inFight then
             return
         end
         hatesGhost = {}
+        local _, pawn = api.getPlayer1()
+        local alive = valid(pawn) and not game.isDead(pawn)
         for _, actor in pairs(enemies) do
             if valid(actor) and not game.isDead(actor) then
                 pcall(function()
-                    actor.BP_PBZHatredManagerComponent:RemoveActorFromHatredList(ghost)
+                    local hatred = actor.BP_PBZHatredManagerComponent
+                    hatred:RemoveActorFromHatredList(ghost)
                     local target = currentTarget(actor)
                     if target and target:GetAddress() == ghost:GetAddress() then
+                        if alive then
+                            hatred:AddActorToHatredList(pawn, {})
+                        end
                         local picker = targetPicker(actor)
                         picker.LastSwitchTime = 0
                         picker:TrySwitchTarget()

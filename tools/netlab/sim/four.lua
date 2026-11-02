@@ -443,6 +443,25 @@ local function hatred()
     Session.revive(s.pcs[3])
     s:run(7)
     check(hates(3), "back on their feet, they're hated again")
+
+    -- A boss was after a guest alone, with nobody else on its list, when the guest dropped: it swung at the empty spot for good.
+    local gone = ghostOf(h, 3)
+    Session.moveTo(s.pcs[2], 90000, 0)
+    Session.moveTo(s.pcs[4], -90000, 0)
+    s:run(1)
+    for i = #list, 1, -1 do
+        list[i] = nil
+    end
+    list[1] = gone
+    Fake.put(e, "target", gone)
+    s.pcs[3].cut = true
+    s:run(4)
+    check(field(gone, "hidden") ~= true, "a partner gone silent keeps their ghost for now, in case it's a loading screen")
+    check(field(e, "target") == h.pawn, "but an enemy after them turns to who's left, with nobody else on its list")
+    check(not hates(3), "and they're off its list")
+    s.pcs[3].cut = false
+    s:run(7)
+    check(field(field(gone, "BP_PBZHatredManagerComponent"), "CanBeHatredNow") == true, "heard again, they can be hated again")
     allErrors(s)
 end
 

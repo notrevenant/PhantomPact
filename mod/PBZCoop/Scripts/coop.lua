@@ -671,7 +671,7 @@ return function(api)
     local function aggroParty(actor, addr, x, y, z, hp)
         local here = {}
         for _, p in ipairs(partners()) do
-            if valid(p.ghost) and not p.ghostHidden and p.target then
+            if valid(p.ghost) and not p.ghostHidden and not p.silent and p.target then
                 game.hateGhost(actor, p.ghost, addr, x, y, z, p.number, p.target)
                 here[#here + 1] = { body = p.ghost, addr = p.ghostAddr, at = p.target, slot = p.number }
             end
@@ -756,7 +756,7 @@ return function(api)
                 if aggro then
                     aggroParty(actor, addr, x, y, z, hp)
                 end
-            elseif aggro and valid(net.ghost) and game.hateGhost and not net.ghostHidden then
+            elseif aggro and valid(net.ghost) and game.hateGhost and not net.ghostHidden and not net.silent then
                 game.hateGhost(actor, net.ghost, addr, x, y, z)
                 if not net.pvp then
                     local _, pawn = getPlayer1()
@@ -2046,7 +2046,15 @@ return function(api)
     -- Nothing from them for a while: they quit, crashed or lost the connection. Their ghost mustn't stand there
     -- frozen, and nothing may stay locked for a fight that's no longer happening (fog walls, held enemies).
     local PARTNER_GONE_S = 12.0   -- longer than a loading screen (respawn teleport, streaming), which is silent too
+    local FIGHT_SILENT_S = 3.0    -- enemies leave them alone from here: the ghost waits for a loading screen, the fight doesn't
     local function watchOnePartner(p)
+        if isHost() and valid(p.ghost) and not p.ghostHidden then
+            local silent = p.lastRemoteAt ~= nil and os.clock() - p.lastRemoteAt >= FIGHT_SILENT_S
+            if silent ~= (p.silent == true) then
+                p.silent = silent
+                game.ghostInFight(p.ghost, not silent, (game.enemiesSoFar()))
+            end
+        end
         local gone = p.lastRemoteAt ~= nil and os.clock() - p.lastRemoteAt >= PARTNER_GONE_S
         if gone and not p.partnerGone then
             p.partnerGone = true

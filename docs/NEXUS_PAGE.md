@@ -10,7 +10,7 @@ Phantom Blade Zero is single-player. Phantom Pact lets a friend join your world:
 
 ## Description
 
-BBCode, for the description field. IMAGE-1 to IMAGE-5 are the five pictures, in that order: put the address of each one in
+BBCode, for the description field. IMAGE-1 to IMAGE-6 are the six pictures, in that order: put the address of each one in
 once they're uploaded. The red is `#ff2222`, for headings and links: the old links' `#ff0000`, a little brighter (3.8:1 on
 Nexus's dark page, against 3.6:1, and 2.5:1 for the old headings' `#cc0000`). Headings are one size up from the old page.
 
@@ -116,6 +116,8 @@ Press [b]Esc[/b], [b]F5[/b] or the [b]X[/b] to close the panel.
 
 The host turns it on before pressing HOST: [b]F5 > MORE > 4 PLAYERS (Beta) > ON[/b]. Up to 3 guests can join, and OFF is the normal 2 players. Enemies and bosses get 50% more health for each person connected. PvP stays off.
 
+[img]IMAGE-5[/img]
+
 This is a beta: four real players haven’t played this version together yet. Please tell us how it goes in the Bugs tab.
 
 [line]
@@ -142,7 +144,7 @@ Xbox pads shouldn’t need any of this, but we haven’t tested them yet.
 [b]3. Play[/b]
 Start the game and press CONTINUE. Player 2 appears beside you within a few seconds. Press [b]F4[/b], hold a button on each pad to light up its card, drag the cards onto the players and press [b]APPLY[/b]. The zip’s [b]Phantom Pact - LOCAL CO-OP.md[/b] has player 2’s controls.
 
-[img]IMAGE-5[/img]
+[img]IMAGE-6[/img]
 
 Online co-op needs none of these pad steps. If your pads stop working in other games, turn off [b]Enable device hiding[/b] in HidHide. A game update can break two-pad play until the mod is updated.
 

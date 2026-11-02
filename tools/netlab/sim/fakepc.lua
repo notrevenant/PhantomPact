@@ -286,7 +286,7 @@ local function hatredOf(pc, owner)
 end
 
 -- The enemy's own target picker: the nearest on its hatred list, as the game's AIScript_TargetSelector does, looked at again
--- after the cooldown.
+-- after the cooldown. With nobody on the list it keeps the target it has, as the game's does: a boss went on swinging at the spot.
 local function pick(pc, e)
     local f = rawget(e, "__fields")
     local items = rawget(f.BP_PBZHatredManagerComponent, "__fields").HatredList.items
@@ -300,7 +300,7 @@ local function pick(pc, e)
             end
         end
     end
-    if best ~= f.target then
+    if best ~= nil and best ~= f.target then
         put(e, "target", best)
         put(e, "targetChanges", (f.targetChanges or 0) + 1)
     end
