@@ -310,7 +310,7 @@ return function(api)
         -- With Role = Local the online panel doesn't start, so this is the way back. From the next start: Role is read once, and
         -- local co-op can't be taken down live. (Removing player 2 at the wrong moment has killed the game's menus.)
         if inside(x, y, ONLINE) then
-            save({ Role = "Off" })
+            save({ Role = "Off", OnlinePanel = "On" })      -- (an ini made for local co-op can have F5 off: then there'd be no way in)
             api.status.lastShown.mode = nil
             api.status.notify("mode", "Multiplayer starts the next time you start the game.")
             return

@@ -382,8 +382,14 @@ return function(api)
     coop.handlers.OUT = partnerBack
 
     coop.restListeners.revive = function(kind)
-        if kind == "bell" then
+        if kind == "bell" or kind == "sit" then
             downs = 0
+        end
+        if kind == "sit" and down then      -- (the one who sat can't be down: this is their partner hearing of it)
+            local pc, pawn = api.getPlayer1()
+            if valid(pc) and valid(pawn) then
+                getUp(pc, pawn)
+            end
         end
     end
 

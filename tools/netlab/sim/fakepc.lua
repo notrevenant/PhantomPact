@@ -490,8 +490,22 @@ function Fake.new(id, scripts, ini, link)
         GetBossHPBarInstances = function() return {} end,
     })
     pc.hudLayout = hudLayout
-    local bag = object(pc, "Backpack", { MedicineInfos = list({}), Accessories = list({}), Inventories = list({}), items = {} })
+    local gourd = object(pc, "Gourd", { CurrentTime = 2, MaxTime = 2 })
+    defs(pc, gourd, { SetCurrentTime = function(self, n) put(self, "CurrentTime", n) end, SetDisplayTime = false })
+    pc.gourd = gourd
+    local gourds = { ForEach = function(_, fn) fn({ get = function() return name("Hulu") end }, { get = function() return gourd end }) end }
+    local bag = object(pc, "Backpack", { MedicineInfos = gourds, BottomMedicineID = name("Hulu"), Accessories = list({}), Inventories = list({}), items = {} })
     pc.bag = bag
+    local BELL_HEAL = "/Script/ProjectPBZ.MelodiousBell:RestoreHealth"
+    local bell = object(pc, "Bell")
+    defs(pc, bell, { RestoreHealth = function()
+        local _, maxhp = Fake.health(pawn)
+        Fake.setHealth(pawn, maxhp)
+        for _, fn in ipairs(pc.hooks[BELL_HEAL] or {}) do
+            fn()
+        end
+    end })
+    pc.bell = bell
     local BACKPACK = "/Script/ProjectPBZ.PBZBackPackSubsystem"
     local function given(self, count, id, push)
         local key = id.ToString and id:ToString() or id
@@ -583,6 +597,7 @@ function Fake.new(id, scripts, ini, link)
         ["/Game/PBZContent/UI/InGame/SwitchUI/WB_TipsText.WB_TipsText_C"] = widgetClass,
         ["/Game/PBZContent/Blueprint/BP_GameMode_Build.BP_GameMode_Build_C:Refresh Monster"] = object(pc, "Function"),
         ["/Game/RenewalContent/Prototypes/Character/BP_RenewalPlayer.BP_RenewalPlayer_C:Respawn Refresh Monster"] = object(pc, "Function"),
+        [BELL_HEAL] = object(pc, "Function"),
         [BACKPACK] = object(pc, "BackpackClass"),
     }
     rawset(found[BACKPACK], "__path", BACKPACK)
@@ -631,6 +646,8 @@ function Fake.new(id, scripts, ini, link)
             return hudLayout
         elseif class == "MapSubsystem" then
             return mapSystem
+        elseif class == "MelodiousBell" then
+            return bell
         end
         return nil
     end

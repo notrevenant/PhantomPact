@@ -1731,14 +1731,13 @@ return function(api)
         end
     end
 
-    ------------------------------------------------------------------ bells (rest = enemies respawn)
+    ------------------------------------------------------------------ bells and refreshes
 
-    -- Resting at a bell (and respawning after death) runs the game mode's "Refresh Monster", which respawns the
-    -- regular enemies (bosses the game considers beaten stay dead). When it runs on one PC, the other PC runs
-    -- its own, so both worlds respawn together. The hook is registered once gameplay is up (the blueprint must
-    -- be loaded first).
-    -- The player's respawn after death runs its own "Respawn Refresh Monster" step, which calls the game mode's
-    -- Refresh Monster: hooked too, so a death respawn can be told from a bell rest (onRest gets "death"/"bell").
+    -- The player's respawn after death runs a "Respawn Refresh Monster" step, which calls the game mode's "Refresh Monster".
+    -- What that brings back is up to each spawner: a boss from its spawner yes, a camp of thugs no. (In this game the dead
+    -- mostly stay dead, at a bell too.) When it runs on one PC, the other PC runs its own, so both worlds do the same. The
+    -- hook is registered once gameplay is up (the blueprint must be loaded first). The respawn step is hooked too, so onRest
+    -- gets "death", or "bell" for a refresh with no death: nothing in the game does that, only a mod that adds respawns.
     local REFRESH_FN = "/Game/PBZContent/Blueprint/BP_GameMode_Build.BP_GameMode_Build_C:Refresh Monster"
     local RESPAWN_REFRESH_FN = "/Game/RenewalContent/Prototypes/Character/BP_RenewalPlayer.BP_RenewalPlayer_C:Respawn Refresh Monster"
     local RESPAWN_WINDOW_S = 3.0
@@ -1779,7 +1778,7 @@ return function(api)
         return restHooked
     end
 
-    -- The other player rested: respawn our regular enemies too.
+    -- The other player's world refreshed: this one does too.
     function game.refreshEnemies()
         local pc = api.getPlayer1()
         local gm = valid(pc) and api.gs():GetGameMode(pc) or nil
@@ -1801,6 +1800,77 @@ return function(api)
         local _, pawn = api.getPlayer1()
         local ok, err = pcall(function() pawn["Respawn Refresh Monster"](pawn) end)
         log("Respawn Refresh Monster: " .. tostring(ok) .. " " .. tostring(err))
+    end
+
+    function game.backpackOf(pawn)
+        local ok, bp = pcall(function()
+            return StaticFindObject("/Script/Engine.Default__SubsystemBlueprintLibrary"):GetWorldSubsystem(pawn,
+                StaticFindObject("/Script/ProjectPBZ.PBZBackPackSubsystem"))
+        end)
+        return ok and valid(bp) and bp or nil
+    end
+
+    function game.gourdInfo(pawn)
+        local bp = game.backpackOf(pawn)
+        local found = nil
+        pcall(function()
+            local id = bp.BottomMedicineID:ToString()
+            bp.MedicineInfos:ForEach(function(k, v)
+                if k:get():ToString() == id then
+                    found = v:get()
+                end
+            end)
+        end)
+        return found
+    end
+
+    -- Sitting at a bell heals, fills the gourd and saves, and runs no Refresh Monster. RestoreHealth is the step every sit has,
+    -- the first ring included. It works on player 1 from any bell, however far: a partner's sit rests this player with it.
+    local SIT_FN = "/Script/ProjectPBZ.MelodiousBell:RestoreHealth"
+    local sitHooked, restingHere = false, false
+
+    function game.hookSit(onSit)
+        if sitHooked or not valid(StaticFindObject(SIT_FN)) then
+            return sitHooked
+        end
+        local ok, err = pcall(function()
+            RegisterHook(SIT_FN, function()
+                if not restingHere then
+                    game.after(0, onSit)
+                end
+            end)
+        end)
+        sitHooked = ok
+        log(ok and "Bell sit hook ready." or ("Bell sit hook failed: " .. tostring(err)))
+        return sitHooked
+    end
+
+    -- Rest this player as a sit would. Health through the bell's own step: written by hand it leaves the low health look on
+    -- the screen. The gourd by hand: the bell's "Restore BackPack Data" also saves, with that bell as the place to respawn.
+    function game.restHere(pawn)
+        local bell = FindFirstOf("MelodiousBell")
+        local healed = false
+        if valid(bell) then
+            restingHere = true
+            healed = pcall(function() bell:RestoreHealth() end)
+            restingHere = false
+        end
+        if not healed then
+            local _, maxhp = game.getHealth(pawn)
+            if maxhp then
+                game.setHealth(pawn, maxhp)
+            end
+        end
+        local gourd = game.gourdInfo(pawn)
+        if gourd then
+            pcall(function()
+                local max = gourd.MaxTime
+                if type(max) == "number" then
+                    gourd:SetCurrentTime(max)
+                    gourd:SetDisplayTime(max)
+                end
+            end)
+        end
     end
 
     ------------------------------------------------------------------ spectating

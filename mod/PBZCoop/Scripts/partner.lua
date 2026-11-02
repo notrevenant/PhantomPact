@@ -108,11 +108,11 @@ return function(api)
         elseif partner.goUntil and os.clock() >= partner.goFrom then
             coop.watchFight(net.watchingFight == true)      -- (held till the trip: they may have to get up first)
             if os.clock() > partner.goUntil then
-                partner.goUntil = nil
+                partner.goUntil, partner.goTo = nil, nil
                 coop.watchFight(false)
                 tip("join", "couldn't reach your partner in time. TP > PARTNER in MORE (F5) can take you there.")
-            elseif coop.joinPartner() == nil then
-                partner.goUntil = nil
+            elseif coop.joinPartner(partner.goTo) == nil then
+                partner.goUntil, partner.goTo = nil, nil
                 coop.watchFight(false)
             end
         end
@@ -172,7 +172,12 @@ return function(api)
 
     -- Sync on as a guest: this player goes to the host as soon as they're linked, on whatever map. (As a host, not.)
     function partner.goOnLink(joining)
-        partner.joining, partner.goUntil = joining, nil
+        partner.joining, partner.goUntil, partner.goTo = joining, nil, nil
+    end
+
+    -- A partner sat at a bell and this player can't use it: dead or watching, they go to p as soon as they're up.
+    function partner.comeTo(p)
+        partner.goUntil, partner.goFrom, partner.goTo = os.clock() + LINK_WAIT_S, 0, p
     end
 
     -- F3, online. (Read on the game thread, like the panels' keys.)

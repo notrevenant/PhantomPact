@@ -164,6 +164,15 @@ return function(api)
         return p
     end
 
+    -- Everyone's boss bars, as one answer.
+    local function countFights()
+        local any = false
+        for _, p in ipairs(partners()) do
+            any = any or p.fights == true
+        end
+        net.partnerFighting = any
+    end
+
     local function isHost()
         return net.role ~= "client"
     end
@@ -888,9 +897,10 @@ return function(api)
     local function syncEnemy(name, actor, nextSeen, held)
         local addr = actor:GetAddress()
         if net.pendingDeaths[name] then
-            -- The host announced this death while our copy wasn't loaded: kill it now that it is.
+            -- The host announced this death while our copy wasn't loaded: kill it now that it is. (Unless the host has it
+            -- alive: a refresh brought it back there.)
             net.pendingDeaths[name] = nil
-            if game.kill and not (game.isDead and game.isDead(actor)) then
+            if game.kill and not net.remoteEnemies[name] and not (game.isDead and game.isDead(actor)) then
                 game.kill(actor)
                 log("Host said " .. name .. " died earlier; killed it here now that it's loaded.")
             end
@@ -1323,15 +1333,22 @@ return function(api)
         end
     end
 
-    -- Enemies respawn (either player rested): every death can happen again, and so can every boss fight.
-    local function forgetDeaths()
-        net.deadSent = {}
+    -- A world refreshed: every boss fight can happen again. After a death the dead mostly stay dead, so a guest goes on by what
+    -- the host killed, or what it never saw die there comes alive here alone. Only a new world ("bell": the host loaded its
+    -- world again, or a mod's respawns) starts from nothing.
+    local function forgetDeaths(kind)
+        if kind ~= "death" then
+            net.deadSent = {}
+            net.guestKilled = {}
+            net.guestKillSent = {}
+            net.hostKilled = {}
+        end
         net.pendingDeaths = {}
-        net.guestKilled = {}
-        net.guestKillSent = {}
+        for name in pairs(net.hostKilled) do
+            net.pendingDeaths[name] = true
+        end
         net.pendingBosses = {}
         net.partnerBosses = {}
-        net.hostKilled = {}
         net.hostBosses = {}
         net.hitHere = {}
         net.fightOf = {}
@@ -1386,11 +1403,13 @@ return function(api)
         else
             log("Rested at a bell (enemies respawned): telling the other player.")
         end
-        forgetDeaths()
+        forgetDeaths(kind)
         sendEvent("R", kind)
     end
 
-    handlers.R = function(kind)
+    handlers.R = function(kind, from)
+        peerOf(from).fights = false     -- (that player's fight is over, and a bar left up there can't say so yet)
+        countFights()
         for _, fn in pairs(restListeners) do
             fn(kind)
         end
@@ -1399,11 +1418,49 @@ return function(api)
         else
             log("The other player rested at a bell: respawning enemies here too.")
         end
-        forgetDeaths()
+        forgetDeaths(kind)
         seen = {}
         if game.refreshEnemies then
             game.refreshEnemies()
         end
+    end
+
+    -- A sit at a bell is everyone's: whoever's dead, down or watching comes to the one who sat, and anyone else is rested where
+    -- they stand. It says the sitter's fight is over too, or a bar left up there would hold a partner's respawn for good.
+    local function onLocalSit()
+        for _, fn in pairs(restListeners) do
+            fn("sit")
+        end
+        if game.resetBosses then
+            game.resetBosses()
+        end
+        net.fightHereAt = nil
+        log("Sat at a bell: telling the other player.")
+        sendEvent("SIT")
+    end
+
+    handlers.SIT = function(_, from)
+        local p = peerOf(from)
+        p.fights = false
+        countFights()
+        for _, fn in pairs(restListeners) do
+            fn("sit")
+        end
+        local _, pawn = getPlayer1()
+        if net.pvp or not valid(pawn) then
+            return
+        end
+        local who = net.party and PLAYERS[p.number].name or "your partner"
+        if game.isDead(pawn) or net.watchingFight then
+            if not net.partnerFighting then       -- (with more than two, someone else's fight can still be on)
+                api.partner.comeTo(p)
+                api.status.notify("rest", who .. " rested at a bell: you'll join them.")
+            end
+        else
+            game.restHere(pawn)
+            api.status.notify("rest", who .. " rested at a bell: you're rested too.")
+        end
+        log("The other player sat at a bell.")
     end
 
     -- The host's world is everyone's truth. Loaded anew (it restarted, or left to the title screen and came back) it has
@@ -1492,7 +1549,8 @@ return function(api)
         if not (net.enabled and t and valid(pawn)) or p.partnerGone or p.ghostHidden == nil then
             return "no partner to go to yet."
         end
-        if game.isDead(pawn) or (game.inCutscene and game.inCutscene()) or net.pvp or game.bossFightActive()
+        -- (Someone who's been watching a fight that's over can still have its bar up here. It goes with the trip.)
+        if game.isDead(pawn) or (game.inCutscene and game.inCutscene()) or net.pvp or (game.bossFightActive() and not net.watchingFight)
             or api.gs():IsGamePaused(controller) or api.localcoop.bellMenuUp() or api.localcoop.screenUp() then
             return "not now."
         end
@@ -1756,6 +1814,13 @@ return function(api)
                 end
             end)
         end
+        if game.hookSit and not net.sitHooked then
+            net.sitHooked = game.hookSit(function()
+                if net.enabled then
+                    onLocalSit()
+                end
+            end)
+        end
     end
 
     -- Where to show that player this frame.
@@ -1921,15 +1986,6 @@ return function(api)
                 enterParty(players, slot)
             end
         end
-    end
-
-    -- Everyone's boss bars, as one answer.
-    local function countFights()
-        local any = false
-        for _, p in ipairs(partners()) do
-            any = any or p.fights == true
-        end
-        net.partnerFighting = any
     end
 
     local function start(role)
@@ -2188,6 +2244,7 @@ return function(api)
         elseif net.watchHeld then
             net.watchHeld = false
             game.spectate(nil)
+            game.resetBosses()
             if valid(pawn) then
                 game.setMinHealth(pawn, 0)
                 if not (net.arriveUntil or net.arrival) then

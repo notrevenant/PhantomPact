@@ -104,7 +104,7 @@ return function(api)
         V.screenNow, V.screenClass = up, cls
         return V.screenNow
     end
-    local restHooked = false
+    local restHooked, sitHooked = false, false
     local p2Dust = nil
     local paused = false            -- single player: player 2 stays out until a joystick or the panel brings them in
     local waiting = {}              -- player number -> health to hold while their joystick is gone
@@ -253,8 +253,39 @@ return function(api)
         end)
     end
 
+    -- A rest heals the player and brings the dead back; the same for player 2. The game sees to the body that sat, which is
+    -- player 2's when they rang the bell (see swapBodies), so player 1's is seen to here then.
+    local function restPlayers()
+        p2Charges = nil
+        local _, p1 = getPlayer1()
+        if swapped then
+            p1 = state.swapBody1
+            if valid(p1) and not game.isDead(p1) then
+                local _, maxHp = game.getHealth(p1)
+                if maxHp then
+                    game.setHealth(p1, maxHp)
+                end
+            end
+        end
+        local p2 = state.p2Pawn
+        if valid(p2) and not p2DownSince and not game.isDead(p2) then
+            pcall(function()
+                local _, maxHp = game.getHealth(p2)       -- fullHealth is defined further down
+                if maxHp then
+                    game.setHealth(p2, maxHp)
+                end
+            end)
+        elseif p2DownSince then
+            if valid(p1) then
+                p2DownSince = nil
+                respawn(p1)
+                log("Player 2 is back (rest).")
+            end
+        end
+    end
+
     -- The game only wakes the enemies around player 1, so a player 2 exploring alone would find an empty world. Wake
-    -- the spawners around them too. Each one once: what they kill stays dead until a bell rest, as for player 1.
+    -- the spawners around them too. Each one once: what they kill stays dead, as for player 1.
     local function wakeEnemies(p1, p2)
         if os.clock() < nextWake then
             return
@@ -264,25 +295,11 @@ return function(api)
             restHooked = game.hookRest(function()
                 woken = {}
                 usedSwitches = {}
-                p2Charges = nil
-                -- A rest heals the player and brings the dead back; the same for player 2.
-                local p2 = state.p2Pawn
-                if valid(p2) and not p2DownSince and not game.isDead(p2) then
-                    pcall(function()
-                        local _, maxHp = game.getHealth(p2)       -- fullHealth is defined further down
-                        if maxHp then
-                            game.setHealth(p2, maxHp)
-                        end
-                    end)
-                elseif p2DownSince then
-                    local _, p1 = getPlayer1()
-                    if valid(p1) then
-                        p2DownSince = nil
-                        respawn(p1)
-                        log("Player 2 is back (rest).")
-                    end
-                end
+                restPlayers()
             end)
+        end
+        if not sitHooked then
+            sitHooked = game.hookSit(restPlayers)
         end
         local here = p2:K2_GetActorLocation()
         if distance(here, p1:K2_GetActorLocation()) < AWAY_CM then
@@ -860,6 +877,33 @@ return function(api)
         p2Dust = now
     end
 
+    -- What gear and training add goes on player 1's Soul alone, and a new Soul starts from the base numbers. Of the 223
+    -- attributes these differ. (UltimateCharge does too, but that gauge is each player's own.)
+    local AS_PLAYER1 = { "Health_Max", "Infliction_Max", "BreakDurationAdditionalMultiplier" }
+    local MATCH_EVERY_S = 2.0
+    local nextMatch = 0
+
+    local function matchPlayer1(p1, p2)
+        if os.clock() < nextMatch then
+            return
+        end
+        nextMatch = os.clock() + MATCH_EVERY_S
+        pcall(function()
+            local from, to = p1.AttributeSetBase, p2.AttributeSetBase
+            local full = select(1, game.getHealth(p2)) >= to.Health_Max.CurrentValue - 0.5
+            for _, name in ipairs(AS_PLAYER1) do
+                local want = from[name].CurrentValue
+                if math.abs(to[name].CurrentValue - want) > 0.01 then
+                    to[name].BaseValue = want
+                    to[name].CurrentValue = want
+                end
+            end
+            if full then
+                game.setHealth(p2, to.Health_Max.CurrentValue)
+            end
+        end)
+    end
+
     -- Player 1 down with player 2 still up: the game's own respawn didn't start in testing, so run its recovery steps
     -- by hand and bring player 1 back beside player 2.
     local function revivePlayer1(p1, p2)
@@ -948,6 +992,7 @@ return function(api)
         downSince = nil
         game.guardFormations()
         passDust(p1, p2)
+        matchPlayer1(p1, p2)
         wakeEnemies(p1, p2)
         keepEnemiesAlive(p1, p2)
         keepDomains(p1, p2)
@@ -1324,13 +1369,7 @@ return function(api)
         return pc
     end
 
-    local function backpackOf(pawn)
-        local ok, bp = pcall(function()
-            return StaticFindObject("/Script/Engine.Default__SubsystemBlueprintLibrary"):GetWorldSubsystem(pawn,
-                StaticFindObject("/Script/ProjectPBZ.PBZBackPackSubsystem"))
-        end)
-        return ok and valid(bp) and bp or nil
-    end
+    local backpackOf, gourdInfo = game.backpackOf, game.gourdInfo
 
     -- Chests, piles and bells are written for "player 0": the approach walk, the loot and the rest all act on the
     -- body player 1's controller possesses. So for the length of such an interaction the two controllers swap
@@ -1988,19 +2027,6 @@ return function(api)
 
     -- Player 2 has gourd charges of its own, as many as the gourd holds, back to full at every bell rest. The game
     -- takes each drink out of the one shared gourd, so that charge is put back and one of player 2's is spent.
-    local function gourdInfo(pawn)
-        local bp = backpackOf(pawn)
-        local found = nil
-        pcall(function()
-            local id = bp.BottomMedicineID:ToString()
-            bp.MedicineInfos:ForEach(function(k, v)
-                if k:get():ToString() == id then
-                    found = v:get()
-                end
-            end)
-        end)
-        return found
-    end
     local function refillPlayer2(pawn)
         local info = gourdInfo(pawn)
         if info then

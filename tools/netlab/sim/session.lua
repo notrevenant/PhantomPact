@@ -132,6 +132,11 @@ function Session.bell(pc)
     end
 end
 
+-- A player sits at a bell: the game heals them, and runs no refresh.
+function Session.sit(pc)
+    pc.bell:RestoreHealth()
+end
+
 function Session.respawned(pc)
     for _, fn in ipairs(pc.hooks["/Game/RenewalContent/Prototypes/Character/BP_RenewalPlayer.BP_RenewalPlayer_C:Respawn Refresh Monster"]) do
         fn()
