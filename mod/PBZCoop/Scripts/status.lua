@@ -3,7 +3,7 @@
 -- (From appdoze's PR #2; the tip is re-created after map travel, which removes it from the screen.)
 --
 -- Shown when something changes: partner connected / lost, settings that differ between the two PCs (the relays'
--- hello exchange), packets refused because the Secrets differ, a lasting high ping, Steam staying on its relays, and an
+-- hello exchange), a different Phantom Pact version, a lasting high ping, Steam staying on its relays, and an
 -- untested game build. Also keeps net.rttMs for the ghost's prediction (coop.lua).
 
 return function(api)
@@ -104,28 +104,25 @@ return function(api)
         return kv
     end
 
-    -- Silence is all a wrong address, a Secret refused on the other PC, or two Hosts or two Guests ever show: neither side
+    -- Silence is all a partner who isn't a Steam friend, isn't hosting, or two Hosts or two Guests ever show: neither side
     -- hears a thing, so the wait itself is what gets reported.
     local function reportSilence(s)
         if s.connected == "yes" then
             status.heard = true
             return
         end
-        if status.heard or s.stopped or tonumber(s.rejected or 0) > 0 or (s.partner_version or "-") ~= "-" then
+        if status.heard or s.stopped or (s.partner_version or "-") ~= "-" then
             return
         end
         local now = os.clock()
         status.aloneSince = status.aloneSince or now
         local waited = now - status.aloneSince
         if s.role == "client" and waited >= GUEST_ALONE_S then
-            local steam = s.via == "steam"
-            notify("alone", (steam and "no friend hosting found. You must be Steam friends, and your partner needs Role = Host, "
-                .. "Connect = Steam and not to be Invisible in Steam (or put their SteamID64 in HostAddress), and the same "
-                or ("no answer from the host (" .. tostring(s.peer) .. "). Check HostAddress and Port, that they're "
-                    .. "in the game on Role = Host, and the same ")) .. "Secret and Phantom Pact version on both PCs.")
+            notify("alone", "no friend hosting found. You must be Steam friends, your partner must press HOST in the F5 "
+                .. "panel and not be Invisible in Steam, and you both need the same Phantom Pact version.")
         elseif s.role == "host" and waited >= HOST_ALONE_S and not status.hostTold then
             status.hostTold = true
-            notify("alone", "nobody has joined yet. Your partner needs Role = Guest and your address: two Hosts never find each other.")
+            notify("alone", "nobody has joined yet. Your partner must be your Steam friend and press GUEST in the F5 panel: two Hosts never find each other.")
         end
     end
 
@@ -182,8 +179,7 @@ return function(api)
         end
 
         if s.connected == "yes" and last.connected ~= "yes" then
-            notify("conn", "partner connected" .. (net.rttMs and string.format(" (ping %d ms)", net.rttMs) or "")
-                .. (s.auth == "on" and ", signed" or "") .. ".")
+            notify("conn", "partner connected" .. (net.rttMs and string.format(" (ping %d ms)", net.rttMs) or "") .. ".")
         elseif s.connected == "no" and last.connected == "yes" then
             notify("conn", "partner disconnected.")
         end
@@ -212,17 +208,10 @@ return function(api)
             end
         end
 
-        local rejected = tonumber(s.rejected) or 0
-        if rejected > (tonumber(last.rejected) or 0) and s.connected ~= "yes" then
-            notify("secret", "packets refused: both PCs need the same Secret in PhantomPact.ini (or both none), and "
-                .. "their clocks within two minutes of each other.")
-        end
-
         if net.rttMs and net.rttMs > HIGH_PING_MS then
             status.highPingReads = status.highPingReads + 1
             if status.highPingReads == HIGH_PING_FOR then
-                notify("ping", string.format("high ping (%d ms).", net.rttMs) .. (s.via == "steam" and ""
-                    or " On Tailscale, run \"tailscale ping\": via DERP means relayed."))
+                notify("ping", string.format("high ping (%d ms).", net.rttMs))
             end
         else
             status.highPingReads = 0
@@ -233,7 +222,7 @@ return function(api)
             if status.relayedReads == RELAYED_FOR and not status.relayShown then
                 status.relayShown = true        -- once a game: it's advice, and nothing changes it mid-fight
                 notify("route", "Steam is relaying this connection, which adds delay. A direct one needs "
-                    .. "SteamDirect = On on both PCs and routers that allow it.")
+                    .. "Steam Direct on (F5, MORE) on both PCs and routers that allow it.")
             end
         else
             status.relayedReads = 0
@@ -266,8 +255,8 @@ return function(api)
             show(args)
         else
             local s = readStatus() or {}
-            log("Relay: connected=" .. tostring(s.connected) .. " rtt_ms=" .. tostring(s.rtt_ms) .. " auth="
-                .. tostring(s.auth) .. " mismatch=" .. tostring(s.mismatch) .. " rejected=" .. tostring(s.rejected))
+            log("Relay: connected=" .. tostring(s.connected) .. " rtt_ms=" .. tostring(s.rtt_ms) .. " route="
+                .. tostring(s.route) .. " mismatch=" .. tostring(s.mismatch))
         end
     end
 

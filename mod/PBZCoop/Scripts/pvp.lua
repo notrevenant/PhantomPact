@@ -1,4 +1,4 @@
--- PvP (PhantomPact.ini "PvP = On", or the "pvp on|off" command): you and your partner can fight each other.
+-- PvP (on in the F5 panel's MORE, or the "pvp on|off" command): you and your partner can fight each other.
 --
 -- The defender's game decides every hit. In your world your partner's ghost is made hostile to you and replays
 -- their moves, so its swings hit you through the game's own combat: block, parry (deflect), perfect dodge,
@@ -25,8 +25,8 @@ return function(api)
 
     local pvp = {
         on = false,
-        damage = 1.0,       -- PvPDamage / 100: scales the ghost's attack, i.e. the damage you take
-        parryPosture = 60,  -- PvPParryPosture: posture a parried attacker loses
+        damage = 1.0,       -- scales the ghost's attack, i.e. the damage you take
+        parryPosture = 60,  -- posture a parried attacker loses
         wins = 0,
         losses = 0,
     }

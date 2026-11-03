@@ -10,12 +10,11 @@ def chinese(size, bold=False):
 WORDS = {
     "en": {
         "prefix": "", "face": font, "title": "ONLINE CO-OP", "status": "STATUS", "through": "CONNECT THROUGH",
-        "play": "PLAY", "password": "PASSWORD",
+        "play": "PLAY",
         "help": ["Host: your world, your partner joins you. Guest: you join the host. Leave: back to playing alone.",
-                 "Your choice is kept for the next start. Both players use the same way of connecting.",
-                 "Steam needs nothing: it finds your friend. The others: copy the host's address, then press Paste.",
-                 "Joining takes you to the host, on any map.",
-                 "Password: optional. If one player sets it, both must use the same one."],
+                 "Your choice is kept for the next start.",
+                 "Steam needs nothing: it finds your friend.",
+                 "Joining takes you to the host, on any map."],
         "settings": "SETTINGS",
         "rows": [("TP > PARTNER", "on: F3 takes you to your partner, on any map"),
                  ("Revive", "strike a downed partner to bring them back"),
@@ -28,23 +27,17 @@ WORDS = {
         "soon": "(Coming soon)",
         "foot": ["Kept for next time. Steam Direct and 4 PLAYERS: next connection. Mode: next game start.",
                  "Difficulty is the game's own. With a partner, enemies always get more health."],
-        "cards": {"online_steam": ("Steam", "friends, no setup"),
-                  "online_tailscale": ("Tailscale", "also Hamachi, Radmin"),
-                  "online_other": ("Other network", "ZeroTier, UU..."),
-                  "online_paste": ("Paste address", "copied from the host"),
-                  "online_password": ("Paste password", "optional, same for both"),
-                  "online_password_set": ("Password set", "press to remove")},
+        "cards": {"online_steam": ("Steam", "friends, no setup")},
         "buttons": {"host": "HOST", "join": "GUEST", "leave": "LEAVE", "settings": "MORE", "back": "BACK"},
         "on": "ON", "off": "OFF", "multiplayer": "MULTIPLAYER", "local": "LOCAL",
     },
     "zh": {
         "prefix": "zh_", "face": chinese, "title": "联机合作", "status": "状态", "through": "连接方式",
-        "play": "游玩", "password": "密码",
+        "play": "游玩",
         "help": ["开房:使用你的世界,队友加入你。加入:你进入房主的世界。离开:回到单人游戏。",
-                 "你的选择会保存到下次启动。双方要使用相同的连接方式。",
-                 "Steam 无需设置,会自动找到好友。其他方式:复制房主的地址,然后按“粘贴地址”。",
-                 "加入后会传送到房主身边,不在同一张地图也可以。",
-                 "密码可以不设。一方设置后,双方必须使用相同的密码。"],
+                 "你的选择会保存到下次启动。",
+                 "Steam 无需设置,会自动找到好友。",
+                 "加入后会传送到房主身边,不在同一张地图也可以。"],
         "settings": "设置",
         "rows": [("传送到队友", "开启后按 F3 传送到队友身边,不限地图"),
                  ("复活", "攻击倒地的队友可将其救起"),
@@ -57,12 +50,7 @@ WORDS = {
         "soon": "(即将推出)",
         "foot": ["设置会保存。Steam 直连和 4 人模式下次连接时生效,模式下次启动游戏时生效。",
                  "难度使用游戏自己的设置。有队友时,敌人总会获得更多生命。"],
-        "cards": {"online_steam": ("Steam", "好友联机,无需设置"),
-                  "online_tailscale": ("Tailscale", "也适用于 Hamachi、Radmin"),
-                  "online_other": ("其他网络", "ZeroTier、UU 加速器"),
-                  "online_paste": ("粘贴地址", "从房主那里复制"),
-                  "online_password": ("粘贴密码", "可不设,双方必须相同"),
-                  "online_password_set": ("密码已设置", "按一下清除")},
+        "cards": {"online_steam": ("Steam", "好友联机,无需设置")},
         "buttons": {"host": "开房", "join": "加入", "leave": "离开", "settings": "更多", "back": "返回"},
         "on": "开", "off": "关", "multiplayer": "多人联机", "local": "本地分屏",
     },
@@ -82,8 +70,7 @@ def online_background(w_):
     d.rectangle((40 * K, 112 * K, 860 * K, 198 * K), fill=(10, 11, 13, 190), outline=FAINT, width=K)
     spaced(d, (40 * K, 226 * K), w_["through"], f(13), DIM, gap=3, anchor="lm")
     spaced(d, (40 * K, 332 * K), w_["play"], f(13), DIM, gap=3, anchor="lm")
-    spaced(d, (604 * K, 332 * K), w_["password"], f(13), DIM, gap=3, anchor="lm")
-    for y, line in zip((430, 452, 474, 496, 518), w_["help"]):
+    for y, line in zip((430, 452, 474, 496), w_["help"]):
         d.text((40 * K, y * K), line, font=f(13), fill=DIM, anchor="lm")
     save(img, w_["prefix"] + "online_bg")
 

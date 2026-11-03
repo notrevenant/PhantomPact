@@ -1,15 +1,15 @@
--- Phantom Pact auto-start: reads PhantomPact.ini, starts the network relay when the game starts, and turns online
--- sync on once the player is in gameplay. Players edit the ini or use the online panel; nothing to run by hand.
+-- Phantom Pact auto-start: reads what the panels saved last time (settings.lua), starts the network relay when the game
+-- starts, and turns online sync on once the player is in gameplay. Everything is set in the game: the F5 panel hosts,
+-- joins and leaves, and there's nothing to edit or run by hand.
 --
 -- The relay is the built-in one (dlls\main.dll, native/ in the repo), which UE4SS loads with the game and which ends
--- with it, or when the player leaves (api.online, for onlinepanel.lua).
+-- with it, or when the player leaves (api.online, for onlinepanel.lua). It always connects through Steam Networking: a
+-- guest joins a Steam friend who is hosting, with no address to type.
 
 return function(api)
     local log, valid, getPlayer1 = api.log, api.valid, api.getPlayer1
     local modDir, modRoot = api.modDir, api.modRoot
     local neton = api.coop.commands.neton
-
-    local placeholder = "PUT-THE-HOSTS-TAILSCALE-IP-HERE"
 
     -- Game builds this version was tested on, by PBZ.exe size (instant to read; hashing a 500 MB exe isn't).
     -- Another build still runs, with a warning: function and field names may have changed. (From appdoze's PR #2.)
@@ -33,16 +33,6 @@ return function(api)
         end
     end)
 
-    local function readText(path)
-        local f = io.open(path, "r")
-        if not f then
-            return nil
-        end
-        local text = f:read("a")
-        f:close()
-        return text
-    end
-
     local function writeText(path, text)
         local f = io.open(path, "w")
         if f then
@@ -51,43 +41,25 @@ return function(api)
         end
     end
 
-    -- "Key = value" lines; ";" and "#" start comments.
-    local function readSettings()
-        local text = readText(modDir() .. "PhantomPact.ini")
-        if not text then
-            return nil
-        end
-        local s = {}
-        for line in text:gmatch("[^\r\n]+") do
-            local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
-            if key and not line:match("^%s*[;#]") then
-                s[key:lower()] = value
-            end
-        end
-        return s
+    local function onOff(value, default)
+        return (value or default):lower() == "on"
     end
 
-    local settings = readSettings()
-    if not settings then
-        log("No PhantomPact.ini: co-op stays off (use the neton command to start it by hand).")
-        return
-    end
+    local settings = api.settings.read()
     if api.hud then
-        api.hud.set((settings.partnercompass or "on"):lower() ~= "off")
+        api.hud.set(onOff(settings.partnercompass, "on"))
     end
     if api.mapicon then
-        api.mapicon.on = (settings.partnermapicon or "on"):lower() ~= "off"
-    end
-    if api.revive then
-        api.revive.set((settings.revive or "off"):lower() == "on")
+        api.mapicon.on = onOff(settings.partnermapicon, "on")
     end
     api.lang.set(settings.language)
-    api.partner.teleport = (settings.partnerteleport or "off"):lower() == "on"
+    api.partner.teleport = onOff(settings.partnerteleport, "off")
     local role = (settings.role or "off"):lower()
     os.remove(modDir() .. "pads_watch.txt")
     os.remove(modDir() .. "pads_want.txt")      -- left by a crash with a panel open: main.dll would think one still is
     if role == "local" then
-        api.localcoop.start(tonumber(settings.joysticks) or 2)
+        -- Two joysticks to start with; the F4 panel's choices (localcoop.txt) replace that.
+        api.localcoop.start(2)
         return
     end
     -- What stops co-op from starting. The player reads it in the game, once in the world: a log line is easy to miss.
@@ -97,54 +69,26 @@ return function(api)
         setupTip = text
     end
 
-    -- What the ini says about reaching the partner in this role, or nil and what's wrong.
-    local function connection(s, wanted)
-        local c = { role = wanted, modRole = ({ host = "host", guest = "client" })[wanted] }
-        if not c.modRole then
-            return nil, "PhantomPact.ini: Role = " .. tostring(s.role) .. ", co-op is off."
+    -- What to ask the relay for in this role, or nil if the role isn't an online one.
+    local function connection(wanted)
+        local modRole = ({ host = "host", guest = "client" })[wanted]
+        if not modRole then
+            return nil
         end
-        c.port = tonumber(s.port) or 47800
-        -- Connect = Steam (P2P through Steam, friends only) or Tailscale (UDP to the host's IP). Old inis have no
-        -- Connect line and keep working over Tailscale.
-        c.steam = (s.connect or "tailscale"):lower() == "steam"
-        c.hostAddress = s.hostaddress or ""
-        if c.hostAddress == placeholder then
-            c.hostAddress = ""
-        end
-        if c.steam then
-            -- Optional for Steam: the host's Steam name (or SteamID64); empty finds any friend hosting in the game.
-            -- An address kept here for Tailscale isn't a name, so it counts as empty.
-            if c.hostAddress:match("^%d+%.%d+%.%d+%.%d+$") or c.modRole == "host" then
-                c.hostAddress = ""
-            end
-            -- Names go on the command line in quotes, so characters cmd.exe treats specially are refused.
-            if c.hostAddress:find('[%"%%&|<>^]') then
-                return nil, "PhantomPact.ini: HostAddress has a character that can't be used (\" % & | < > ^). Leave it empty to join any friend who's hosting."
-            end
-        elseif c.modRole == "client" and (c.hostAddress == "" or not c.hostAddress:match("^[%w%.%-:]+$")) then
-            return nil, "PhantomPact.ini: HostAddress isn't set. Put the host's Tailscale IP there, or use Steam."
-        end
-        return c
+        return { role = wanted, modRole = modRole }
     end
 
-    -- The relay's thread waits for net_start.txt, which appears whole thanks to the rename. It reads the Secret and the
-    -- settings both players should share from the ini itself.
-    -- The Secret counts unless it's empty or a placeholder (the relay's own test, relay.hpp).
-    local function signed(s)
-        local secret = (s.secret or ""):lower()
-        return secret ~= "" and not secret:find("^put%-") and secret ~= "off" and secret ~= "none"
-    end
-
+    -- The relay's thread waits for net_start.txt, which appears whole thanks to the rename. It carries all the relay
+    -- needs: the role, the version, the host's 4 PLAYERS, Steam Direct, and PvP, which both players must have the same.
     local function startRelay(c, s)
         if not api.link then
             setupProblem("Couldn't start the relay: dlls\\main.dll can't be reached. Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide.")
             return false
         end
-        local lines = { "role=" .. c.modRole, "port=" .. c.port, "transport=" .. (c.steam and "steam" or "udp"),
-            "version=" .. (api.version or "?") }
-        if c.modRole == "client" and c.hostAddress ~= "" then
-            lines[#lines + 1] = "peer=" .. c.hostAddress
-        end
+        local lines = { "role=" .. c.modRole, "version=" .. (api.version or "?"),
+            "fourplayers=" .. (onOff(s.fourplayers, "off") and "on" or "off"),
+            "steamdirect=" .. (onOff(s.steamdirect, "off") and "on" or "off"),
+            "pvp=" .. (onOff(s.pvp, "off") and "on" or "off") }
         local path = modDir() .. "net_start.txt"
         writeText(path .. ".tmp", table.concat(lines, "\n") .. "\n")
         os.remove(path)
@@ -152,15 +96,12 @@ return function(api)
             setupProblem("Couldn't start the relay: net_start.txt can't be written in " .. modDir())
             return false
         end
-        local joining = c.modRole ~= "client" and ""
-            or c.hostAddress ~= "" and (", joining " .. c.hostAddress)
-            or ", looking for a Steam friend who's hosting"
-        log("Relay started as " .. c.role .. joining .. (c.steam and " over Steam" or (" on UDP " .. c.port))
-            .. (signed(s) and ", packets signed (Secret set)" or "") .. ".")
+        log("Relay started as " .. c.role .. (c.modRole == "client" and ", looking for a Steam friend who's hosting" or "")
+            .. " over Steam.")
         return true
     end
 
-    local current = nil             -- the connection asked for; .settings is the ini it came from, .on once sync is on
+    local current = nil             -- the connection asked for; .settings are the ones it started with, .on once sync is on
 
     -- The relay asked for has spoken, if only to say it failed (status.lua tells the player), and not the run before it.
     local function relayReady()
@@ -190,17 +131,8 @@ return function(api)
                 neton(current.modRole)
                 api.partner.goOnLink(current.modRole == "client")
                 log("Phantom Pact " .. (current.modRole == "host" and "Host" or "Guest") .. ": co-op on.")
-                if api.scaling and (tonumber(s.coopenemyhealth) or tonumber(s.coopenemyposture)) then
-                    api.scaling.command(string.format("%d %d", tonumber(s.coopenemyhealth) or 150,
-                        tonumber(s.coopenemyposture) or 130))
-                end
-                if (s.pvp or ""):lower() == "on" and api.pvp then
-                    if tonumber(s.pvpdamage) then
-                        api.pvp.command("damage " .. s.pvpdamage)
-                    end
-                    if tonumber(s.pvpparryposture) then
-                        api.pvp.command("parry " .. s.pvpparryposture)
-                    end
+                -- Co-op difficulty and PvP's numbers are fixed (scaling.lua, pvp.lua), the same on every PC.
+                if onOff(s.pvp, "off") and api.pvp then
                     api.pvp.set(true)
                 end
             end
@@ -223,9 +155,8 @@ return function(api)
     end
 
     api.online = {
-        settings = readSettings,
+        settings = api.settings.read,
         connection = connection,
-        signed = signed,
         current = function()
             return current
         end,
@@ -239,21 +170,13 @@ return function(api)
         end,
     }
 
-    if role ~= "local" and (settings.onlinepanel or "on"):lower() == "on" then
-        api.onlinepanel.start()
-    end
-    -- Also with Role = Off: the panel can start co-op later, and F3 only acts once connected.
-    if role ~= "local" then
-        api.partner.start()
-    end
+    api.onlinepanel.start()
+    -- Also when not connected: the panel can start co-op later, and F3 only acts once connected.
+    api.partner.start()
 
-    local c, why = connection(settings, role)
+    local c = connection(role)
     if not c then
-        if role == "host" or role == "guest" then
-            setupProblem(why)
-        else
-            log(why)
-        end
+        log("Online co-op is off: press F5 in the game to host or join.")
         return
     end
     c.settings = settings

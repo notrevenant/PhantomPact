@@ -1,4 +1,4 @@
--- The local co-op panel (F4, Role = Local): player count, screen layout, and who uses which controls, dragged as cards
+-- The local co-op panel (F4, in Local mode): player count, screen layout, and who uses which controls, dragged as cards
 -- onto players. Pictures come from art/make_local_panel.py and are shown in the same one-image widget as the compass,
 -- so the mouse is read here each frame rather than through widget events.
 
@@ -52,48 +52,8 @@ return function(api)
         return { KeyName = FName(name) }
     end
 
-    -- PhantomPact.ini, for both panels. Only these lines change: comments, the other settings and the file's line ends stay as
-    -- they are.
-    local function save(values)
-        local path = api.modDir() .. "PhantomPact.ini"
-        local f = io.open(path, "rb")
-        local text = f and f:read("a") or ""
-        if f then
-            f:close()
-        end
-        local out, seen, at = {}, {}, 1
-        while at <= #text do
-            local stop = text:find("\n", at, true) or #text
-            local line = text:sub(at, stop)
-            local name_ = line:match("^%s*([%w_]+)%s*=")
-            for name, value in pairs(values) do
-                if name_ and name_:lower() == name:lower() then
-                    line = name .. " = " .. value .. (line:match("\r?\n$") or "")
-                    seen[name] = true
-                end
-            end
-            out[#out + 1] = line
-            at = stop + 1
-        end
-        for name, value in pairs(values) do
-            if not seen[name] then
-                out[#out + 1] = name .. " = " .. value .. "\n"
-            end
-        end
-        local tmp = io.open(path .. ".tmp", "wb")
-        local wrote = tmp and tmp:write(table.concat(out))
-        if tmp then
-            tmp:close()
-        end
-        if not wrote then
-            log("Couldn't save PhantomPact.ini: this choice lasts until the game closes.")
-            return
-        end
-        os.remove(path)
-        if not os.rename(path .. ".tmp", path) then
-            log("Couldn't save PhantomPact.ini: see PhantomPact.ini.tmp in " .. api.modDir())
-        end
-    end
+    -- What both panels remember for the next start (settings.lua).
+    local save = api.settings.save
 
     local function part(name, tex, w, h, z)
         local p = parts[name]
@@ -307,10 +267,10 @@ return function(api)
             panel.close()
             return
         end
-        -- With Role = Local the online panel doesn't start, so this is the way back. From the next start: Role is read once, and
+        -- In local co-op the online panel doesn't start, so this is the way back. From the next start: the mode is read once, and
         -- local co-op can't be taken down live. (Removing player 2 at the wrong moment has killed the game's menus.)
         if inside(x, y, ONLINE) then
-            save({ Role = "Off", OnlinePanel = "On" })      -- (an ini made for local co-op can have F5 off: then there'd be no way in)
+            save({ Role = "Off" })
             api.status.lastShown.mode = nil
             api.status.notify("mode", "Multiplayer starts the next time you start the game.")
             return

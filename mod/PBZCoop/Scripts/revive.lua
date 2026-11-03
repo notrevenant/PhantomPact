@@ -1,5 +1,5 @@
 -- Reviving your partner, by Nightreign's rules: docs/REVIVE.md has the numbers and where they come from. (Design from
--- appdoze's issue #8.) PhantomPact.ini Revive = On, on both PCs.
+-- appdoze's issue #8.) Coming soon: off unless the "revive on" command turns it on, on both PCs.
 --
 -- Each player's game decides that player's life, as everywhere else in the mod: the downed player's PC holds the gauge
 -- and the timer, and the partner's PC only says "I swung at you". Nothing here writes to a save: the health floor,

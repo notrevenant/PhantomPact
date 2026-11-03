@@ -1,11 +1,12 @@
--- The online panel (F5 with any Role but Local): host, join or leave from inside the game, with no ini to edit and no
--- restart. It's drawn and read as the local co-op panel is (panel.lua, whose notes on the mouse hold here too): pictures
--- from art/make_online_panel.py, and the words that change in the game's own ink-bar text. autostart.lua does the
--- connecting (api.online); this file picks what to ask for, keeps it in PhantomPact.ini and says how it's going.
+-- The online panel (F5, in any mode but Local): host, join or leave from inside the game, with nothing to edit and no
+-- restart. It's the only place settings change. It's drawn and read as the local co-op panel is (panel.lua, whose notes
+-- on the mouse hold here too): pictures from art/make_online_panel.py, and the words that change in the game's own
+-- ink-bar text. autostart.lua does the connecting (api.online), always through Steam; this file picks what to ask for,
+-- keeps it for the next start (settings.lua) and says how it's going.
 
 return function(api)
     local log, valid, hud, game, kit = api.log, api.valid, api.hud, api.game, api.panel.kit
-    local save = kit.save
+    local save = api.settings.save
 
     local KEY_MS = 40               -- how often F5 is looked at; a press lasts longer
     local TICK_MS = 15
@@ -20,9 +21,7 @@ return function(api)
     local CLOSE = { x = 848, y = 14, w = 38, h = 38 }
     -- main.dll clicks the panel's middle as it opens and on coming back to the game (see free_cursor): no click counts for
     -- REFOCUS_S then.
-    local CONNECT = { steam = { x = 40, y = 244 }, tailscale = { x = 228, y = 244 }, other = { x = 416, y = 244 } }
-    local PASTE = { x = 604, y = 244 }
-    local PASSWORD = { x = 604, y = 344 }
+    local STEAM = { x = 40, y = 244 }  -- the way to connect: always Steam, shown as the one card
     local BUTTONS = { host = { x = 40, y = 350 }, join = { x = 228, y = 350 }, leave = { x = 416, y = 350 } }
     local LANGUAGE = { en = { x = 40, y = 18 }, zh = { x = 124, y = 18 } }
     local LANGUAGE_W, LANGUAGE_H = 76, 30
@@ -43,31 +42,16 @@ return function(api)
     }
 
     local panel = { open = false }
-    local choice = { connect = "tailscale" }
     local pc = nil
     local wasKey, wasDown, keyArmed, keyHeld, escHeld = false, false, false, false, false
     local wasFocused, clicksFrom = false, 0
-    local page, options, loggedWords, hasPassword = "main", {}, nil, false
+    local page, options, loggedWords = "main", {}, nil
     local words, wordsWidget, wordsAt, note, mouseAt = nil, nil, 0, nil, 0
-
-    ------------------------------------------------------------------ PhantomPact.ini
-
-    -- Other network: any virtual LAN whose addresses the host's filter wouldn't know (ZeroTier, UU Accelerator).
-    local function connectIn(settings)
-        if (settings and settings.connect or "tailscale"):lower() == "steam" then
-            return "steam"
-        end
-        return (settings and settings.allowanyaddress or "off"):lower() == "on" and "other" or "tailscale"
-    end
-
-    local function network(name)
-        return { Connect = name == "steam" and "Steam" or "Tailscale", AllowAnyAddress = name == "other" and "On" or "Off" }
-    end
 
     ------------------------------------------------------------------ the settings page
 
     local function readOptions()
-        local s = api.online.settings() or {}
+        local s = api.settings.read()
         local function onOff(value, default)
             return (value or default):lower() == "on" and "on" or "off"
         end
@@ -78,13 +62,13 @@ return function(api)
             mapicon = onOff(s.partnermapicon, "on"),
             direct = onOff(s.steamdirect, "off"),
             four = onOff(s.fourplayers, "off"),
-            -- Only Role = Local is local: Off, Host and Guest, and a fresh install, are all multiplayer. Read each time this
+            -- Only a Local role is local: Off, Host and Guest, and a fresh install, are all multiplayer. Read each time this
             -- page opens, as Host, Guest and Leave write Role too.
             mode = (s.role or "off"):lower() == "local" and "local" or "multiplayer",
         }
     end
 
-    -- Kept in PhantomPact.ini, and in force at once. (Steam Direct and 4 players from the next connection: the relay reads
+    -- Kept for the next start, and in force at once. (Steam Direct and 4 players from the next connection: the relay reads
     -- them as it starts. 4 players is the host's choice: a guest follows what the host's relay says. Mode from the next start
     -- of the game: Role is read once, and local co-op can't be taken down live.)
     local function choose(row, value)
@@ -111,7 +95,7 @@ return function(api)
             save({ Role = "Local" })
             api.status.lastShown.mode = nil
             api.status.notify("mode", "Local co-op starts the next time you start the game.")
-        elseif row == "mode" and ((api.online.settings() or {}).role or ""):lower() == "local" then
+        elseif row == "mode" and (api.settings.read().role or ""):lower() == "local" then
             save({ Role = "Off" })          -- (never over a Host or Guest: this row only undoes Local)
         end
     end
@@ -173,8 +157,7 @@ return function(api)
         if c.modRole == "host" then
             return "Waiting for a partner."
         end
-        return c.hostAddress ~= "" and ("Looking for " .. c.hostAddress .. "...")
-            or "Looking for a Steam friend who's hosting..."
+        return "Looking for a Steam friend who's hosting..."
     end
 
     local function showWords(now)
@@ -219,54 +202,9 @@ return function(api)
             save({ Role = "Off" })
             return
         end
-        local settings = api.online.settings() or {}
-        settings.connect = choice.connect == "steam" and "steam" or "tailscale"
-        local c, why = api.online.connection(settings, what == "host" and "host" or "guest")
-        if not c then
-            note = why
-            log("Online panel: " .. why)
-            return
-        end
-        -- Saved first: the relay reads the ini as it starts.
-        local values = network(choice.connect)
-        values.Role = what == "host" and "Host" or "Guest"
-        save(values)
-        api.online.start(c, settings)
-    end
-
-    local function clipboard()
-        return ((api.link and api.link.paste and api.link.paste() or ""):gsub("^%s+", ""):gsub("%s+$", ""))
-    end
-
-    -- Tailscale's own menu copies your address: the host sends it, and the guest needs no text file for it.
-    local function pasteAddress()
-        local text = clipboard()
-        wordsAt = 0
-        if text == "" or #text > 64 or text:find('[%s"%%&|<>^]') then
-            note = "Copy the host's address first, then press Paste."
-            return
-        end
-        save({ HostAddress = text })
-        note = "Host address set to " .. text .. "."
-    end
-
-    -- The Secret, which the relay reads from the ini as it starts. Pressed again it goes. It's never shown or logged.
-    local function pressPassword()
-        wordsAt = 0
-        if hasPassword then
-            save({ Secret = "" })
-            hasPassword = false
-            note = "Password removed."
-            return
-        end
-        local text = clipboard()
-        if #text > 128 or text:find("%c") or not api.online.signed({ secret = text }) then
-            note = "Copy the password first, then press Paste password."
-            return
-        end
-        save({ Secret = text })
-        hasPassword = true
-        note = "Password set. Your partner needs the same one."
+        local c = api.online.connection(what == "host" and "host" or "guest")
+        save({ Role = what == "host" and "Host" or "Guest" })
+        api.online.start(c, api.settings.read())
     end
 
     local function setLanguage(code)
@@ -322,19 +260,6 @@ return function(api)
                 setLanguage(code)
             end
         end
-        if not running() and kit.inside(x, y, PASSWORD, CARD_W, CARD_H) then
-            pressPassword()
-        end
-        if choice.connect ~= "steam" and not running() and kit.inside(x, y, PASTE, CARD_W, CARD_H) then
-            pasteAddress()
-        end
-        for name, r in pairs(CONNECT) do
-            if not running() and name ~= choice.connect and kit.inside(x, y, r, CARD_W, CARD_H) then
-                choice.connect = name
-                note, wordsAt = nil, 0
-                save(network(name))
-            end
-        end
     end
 
     ------------------------------------------------------------------ on screen
@@ -371,23 +296,8 @@ return function(api)
         end
         local lang = LANGUAGE[api.lang.code]
         kit.place(kit.part("on_sel_lang", "sel_lang", LANGUAGE_W, LANGUAGE_H, 2), lang.x, lang.y)
-        for name, r in pairs(CONNECT) do
-            local p = worded("on_" .. name, "online_" .. name, CARD_W, CARD_H, 1)
-            kit.place(p, r.x, r.y)
-            kit.dim(p, (c and name ~= choice.connect) and 0.3 or 1.0)
-        end
-        local at = CONNECT[choice.connect]
-        kit.place(kit.part("on_sel_card", "sel_card", CARD_W, CARD_H, 2), at.x, at.y)
-        if choice.connect ~= "steam" then
-            local p = worded("on_paste", "online_paste", CARD_W, CARD_H, 1)
-            kit.place(p, PASTE.x, PASTE.y)
-            kit.dim(p, c and 0.3 or 1.0)
-        else
-            kit.hide("on_paste")
-        end
-        local key = worded("on_password", hasPassword and "online_password_set" or "online_password", CARD_W, CARD_H, 1)
-        kit.place(key, PASSWORD.x, PASSWORD.y)
-        kit.dim(key, c and 0.3 or 1.0)
+        kit.place(worded("on_steam", "online_steam", CARD_W, CARD_H, 1), STEAM.x, STEAM.y)
+        kit.place(kit.part("on_sel_card", "sel_card", CARD_W, CARD_H, 2), STEAM.x, STEAM.y)
         -- Your role is the red one.
         local mine = c and (c.modRole == "host" and "host" or "join")
         for name, r in pairs(BUTTONS) do
@@ -462,9 +372,6 @@ return function(api)
             return
         end
         pc = controller
-        local settings = api.online.settings()
-        choice.connect = connectIn(settings)
-        hasPassword = api.online.signed(settings or {})
         -- Widgets don't survive a map change.
         for name, p in pairs(kit.parts) do
             if not api.status.onScreen(p.widget) then
@@ -494,7 +401,7 @@ return function(api)
         log("Online panel closed.")
     end
 
-    -- F5 is read on the game thread, as in panel.lua. Only from here on does Lua look at it: never with Role = Local.
+    -- F5 is read on the game thread, as in panel.lua. Only from here on does Lua look at it: never in Local mode.
     local function readKey()
         local controller, pawn = api.getPlayer1()
         if not valid(pawn) then
@@ -532,7 +439,7 @@ return function(api)
 
     panel.describe = describe       -- for tools/netlab/bench/online-panel.ps1
 
-    -- onlinepanel toggle|host|join|leave|steam|tailscale|other|press <x> <y>|row <name>: what the keys and the mouse do, for tests.
+    -- onlinepanel toggle|host|join|leave|press <x> <y>|row <name>: what the keys and the mouse do, for tests.
     function panel.command(rest)
         local word, x, y = (rest or ""):match("^(%S*)%s*(%S*)%s*(%S*)")
         if word == "toggle" then
@@ -544,15 +451,12 @@ return function(api)
         elseif word == "host" or word == "join" or word == "leave" then
             local r = BUTTONS[word]
             press(r.x + 5, r.y + 5)
-        elseif CONNECT[word] then
-            local r = CONNECT[word]
-            press(r.x + 5, r.y + 5)
         elseif word == "press" then
             press(tonumber(x), tonumber(y))
         elseif word == "row" then
             log("Online panel row " .. x .. ": " .. tostring(options[x]))
         end
-        log("Online panel " .. (panel.open and "open" or "closed") .. ", " .. choice.connect .. ": " .. describe())
+        log("Online panel " .. (panel.open and "open" or "closed") .. ", Steam: " .. describe())
     end
 
     return panel

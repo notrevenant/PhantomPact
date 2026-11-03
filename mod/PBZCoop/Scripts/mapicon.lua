@@ -1,4 +1,4 @@
--- Your partner on the open map (PhantomPact.ini PartnerMapIcon; from appdoze's PR #6). With more than two players there's a
+-- Your partner on the open map (Partner on the map in the F5 panel; from appdoze's PR #6). With more than two players there's a
 -- pointer each (EXACG's, PR #11), in that player's colour (coop.players). A copy of the game's own player
 -- marker (the map's WB_PlayerIcon) in jade, on the same canvas (WB_MapNew_C.Gadget, where the map's icons live), so it
 -- pans and zooms with the map and hides with it on the world map. Red while they're down, like the compass. Same area

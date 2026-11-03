@@ -1,5 +1,5 @@
 -- Co-op difficulty, Elden Ring style: while your partner is with you, enemies and bosses get more health and
--- posture (PhantomPact.ini CoopEnemyHealth / CoopEnemyPosture, in percent; 100 = off).
+-- posture (fixed: 150% health and 130% posture, the same on every PC; the "scale" command changes them for tests).
 --
 -- Both players' games scale the same enemies by the same factor, so the host's numbers (which the guest's copies
 -- follow down) and the guest's own copies stay in step. Each enemy is scaled once, keeping its current share of
@@ -17,8 +17,8 @@ return function(api)
     local net = api.coop.net
 
     local scaling = {
-        health = 1.5,       -- CoopEnemyHealth / 100
-        posture = 1.3,      -- CoopEnemyPosture / 100
+        health = 1.5,
+        posture = 1.3,
     }
 
     local PASS_S = 1.0              -- a look over the enemies starts this often while the partner is here

@@ -1,4 +1,4 @@
--- Local co-op (Role = Local): a second player on this PC, split screen, one copy of the game. Both Souls are in the
+-- Local co-op (F5 > MORE > Mode > LOCAL): a second player on this PC, split screen, one copy of the game. Both Souls are in the
 -- same world, so nothing goes over the network. Player 2 is a copy of player 1's Soul with its own controller and
 -- camera; the game's own input setup runs when the controller possesses it.
 

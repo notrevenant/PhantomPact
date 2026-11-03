@@ -467,7 +467,7 @@ local function openLink()
         end
         link[name] = fn
     end
-    for _, name in ipairs({ "layout", "read", "pointer", "paste", "party", "player", "send_to" }) do      -- only ever faster: without them, reads go through UE4SS
+    for _, name in ipairs({ "layout", "read", "pointer", "party", "player", "send_to" }) do      -- only ever faster: without them, reads go through UE4SS
         link[name] = package.loadlib(dll, "pp_" .. name)
     end
     if not link.now() then
@@ -498,6 +498,7 @@ local api = {
     state = state,
     version = VERSION,
 }
+api.settings = dofile(SCRIPT_DIR .. "settings.lua")(api)
 api.lang = dofile(SCRIPT_DIR .. "lang.lua")()
 api.game = dofile(SCRIPT_DIR .. "pbz.lua")(api)
 local coop = dofile(SCRIPT_DIR .. "coop.lua")(api)
@@ -644,7 +645,8 @@ end)
 
 log("Loaded (instance " .. INSTANCE .. ", v" .. VERSION .. ", files in " .. modDir() .. "). F6 info | F7 nearby" .. (DEV_KEYS and " | F8 P2 clone | F9 remove P2 | F10 P2 controller only | F11 P2 plain pawn" or "") .. " | cmd.txt enabled")
 
--- PhantomPact.ini: start the relay and turn co-op on by itself (Role = Host/Guest; Off leaves it to neton).
+-- settings.txt, as the panels left it: start the relay and turn co-op on by itself (Host or Guest last time; Off leaves it
+-- to the F5 panel or neton).
 local okAuto, errAuto = pcall(function() dofile(SCRIPT_DIR .. "autostart.lua")(api) end)
 if not okAuto then
     log("Auto-start error: " .. tostring(errAuto))

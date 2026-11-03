@@ -4,7 +4,7 @@
 -- in another area or gone.
 -- With more than two players there's a dot for each (EXACG's, PR #11), in that player's colour (coop.players), and two that
 -- would sit on one another are moved apart.
--- PhantomPact.ini PartnerCompass = On|Off. Art (painted in Lumina, in the game's ink-wash style): art/compass_line.png
+-- Partner compass on or off in the F5 panel (MORE). Art (painted in Lumina, in the game's ink-wash style): art/compass_line.png
 -- (a dry-brush silver stroke) and art/partner_dot.png (a silver seal with 伴, "companion"), shown in the game's own
 -- one-image widget (W_PaintSize). (Idea from appdoze's PR #5 partner HUD; a compass instead of big labels.)
 
