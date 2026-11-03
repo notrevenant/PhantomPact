@@ -1,10 +1,37 @@
-"""Builds the online panel's pictures (mod/PBZCoop/art/panel) in the local panel's look, in English and in Chinese (zh_*).
-Words that change are drawn in the game by the mod. Needs Pillow and Windows' Microsoft YaHei: python art/make_online_panel.py"""
+"""Builds the online panel's pictures (mod/PBZCoop/art/panel) in the local panel's look, in English and in Chinese (zh_*),
+at the same sharpness (make_local_panel.py: K and SCALE). Words that change are drawn in the game by the mod.
+Needs Pillow, and for the Chinese a Simplified Chinese font: Noto Serif CJK SC (Linux: fonts-noto-cjk) or, on Windows,
+SimSun or Microsoft YaHei. Run: python art/make_online_panel.py"""
 from make_local_panel import *
+
+# Simplified Chinese faces, best first: a Song (serif) face goes with the Garamond. In a .ttc, the face is found by name.
+CHINESE = [
+    ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc", "Noto Serif CJK SC"),
+    ("C:/Windows/Fonts/NotoSerifSC-VF.ttf", "C:/Windows/Fonts/NotoSerifSC-VF.ttf", None),
+    ("C:/Windows/Fonts/simsun.ttc", "C:/Windows/Fonts/simsun.ttc", "SimSun"),
+    ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyhbd.ttc", "Microsoft YaHei"),
+]
+
+
+def _face(path, family, size):
+    for index in range(12):
+        try:
+            f = ImageFont.truetype(path, size, index=index)
+        except OSError:
+            return None
+        if family is None or f.getname()[0] == family:
+            return f
+    return None
 
 
 def chinese(size, bold=False):
-    return ImageFont.truetype(FONTS + ("msyhbd.ttc" if bold else "msyh.ttc"), size * K)
+    for regular, heavy, family in CHINESE:
+        path = heavy if bold else regular
+        if os.path.exists(path):
+            f = _face(path, family, size * K)
+            if f:
+                return f
+    raise SystemExit("No Simplified Chinese font: install fonts-noto-cjk, or run this on Windows.")
 
 
 WORDS = {
@@ -12,9 +39,9 @@ WORDS = {
         "prefix": "", "face": font, "title": "ONLINE CO-OP", "status": "STATUS", "through": "CONNECT THROUGH",
         "play": "PLAY",
         "help": ["Host: your world, your partner joins you. Guest: you join the host. Leave: back to playing alone.",
-                 "Your choice is kept for the next start.",
-                 "Steam needs nothing: it finds your friend.",
-                 "Joining takes you to the host, on any map."],
+                 "Press Steam to pick which hosting friend to join, or leave it on any friend. Joining takes you to the host.",
+                 "Friends can also use Join Game, or accept your Invite to Game, in Steam's friends list.",
+                 "You must be Steam friends. Your choice is kept for the next start."],
         "settings": "SETTINGS",
         "rows": [("TP > PARTNER", "on: F3 takes you to your partner, on any map"),
                  ("Revive", "strike a downed partner to bring them back"),
@@ -27,7 +54,7 @@ WORDS = {
         "soon": "(Coming soon)",
         "foot": ["Kept for next time. Steam Direct and 4 PLAYERS: next connection. Mode: next game start.",
                  "Difficulty is the game's own. With a partner, enemies always get more health."],
-        "cards": {"online_steam": ("Steam", "friends, no setup")},
+        "cards": {"online_steam": ("Steam", "press to pick a friend")},
         "buttons": {"host": "HOST", "join": "GUEST", "leave": "LEAVE", "settings": "MORE", "back": "BACK"},
         "on": "ON", "off": "OFF", "multiplayer": "MULTIPLAYER", "local": "LOCAL",
     },
@@ -35,9 +62,9 @@ WORDS = {
         "prefix": "zh_", "face": chinese, "title": "联机合作", "status": "状态", "through": "连接方式",
         "play": "游玩",
         "help": ["开房:使用你的世界,队友加入你。加入:你进入房主的世界。离开:回到单人游戏。",
-                 "你的选择会保存到下次启动。",
-                 "Steam 无需设置,会自动找到好友。",
-                 "加入后会传送到房主身边,不在同一张地图也可以。"],
+                 "按 Steam 选择要加入哪位开房的好友,或保持任意好友。加入后会传送到房主身边。",
+                 "好友也可以在 Steam 好友列表里点“加入游戏”,或接受你的“邀请加入游戏”。",
+                 "你们必须是 Steam 好友。你的选择会保存到下次启动。"],
         "settings": "设置",
         "rows": [("传送到队友", "开启后按 F3 传送到队友身边,不限地图"),
                  ("复活", "攻击倒地的队友可将其救起"),
@@ -50,7 +77,7 @@ WORDS = {
         "soon": "(即将推出)",
         "foot": ["设置会保存。Steam 直连和 4 人模式下次连接时生效,模式下次启动游戏时生效。",
                  "难度使用游戏自己的设置。有队友时,敌人总会获得更多生命。"],
-        "cards": {"online_steam": ("Steam", "好友联机,无需设置")},
+        "cards": {"online_steam": ("Steam", "点击选择好友")},
         "buttons": {"host": "开房", "join": "加入", "leave": "离开", "settings": "更多", "back": "返回"},
         "on": "开", "off": "关", "multiplayer": "多人联机", "local": "本地分屏",
     },
@@ -61,11 +88,11 @@ def online_background(w_):
     w, h = 900, 560
     f = w_["face"]
     img, d = canvas(w, h)
-    d.rectangle((0, 0, w * K, h * K), fill=BLACK)
+    shade(d, w, h)
     frame(d, w, h, FAINT)
     corners(d, w, h)
     spaced(d, (w * K / 2, 42 * K), w_["title"], f(25), BRIGHT, gap=7)
-    d.line(((w / 2 - 170) * K, 67 * K, (w / 2 + 170) * K, 67 * K), fill=FAINT, width=K)
+    rule(d, w / 2, 67, 170)
     spaced(d, (40 * K, 96 * K), w_["status"], f(13), DIM, gap=3, anchor="lm")
     d.rectangle((40 * K, 112 * K, 860 * K, 198 * K), fill=(10, 11, 13, 190), outline=FAINT, width=K)
     spaced(d, (40 * K, 226 * K), w_["through"], f(13), DIM, gap=3, anchor="lm")
@@ -79,11 +106,11 @@ def settings_background(w_):
     w, h = 900, 560
     f = w_["face"]
     img, d = canvas(w, h)
-    d.rectangle((0, 0, w * K, h * K), fill=BLACK)
+    shade(d, w, h)
     frame(d, w, h, FAINT)
     corners(d, w, h)
     spaced(d, (w * K / 2, 42 * K), w_["settings"], f(25), BRIGHT, gap=7)
-    d.line(((w / 2 - 170) * K, 67 * K, (w / 2 + 170) * K, 67 * K), fill=FAINT, width=K)
+    rule(d, w / 2, 67, 170)
     for y, (label, sub) in zip((104, 155, 206, 257, 308, 359, 410, 461), w_["rows"]):
         d.text((40 * K, (y - 8) * K), label, font=f(15), fill=BRIGHT, anchor="lm")
         d.text((40 * K, (y + 11) * K), sub, font=f(11), fill=DIM, anchor="lm")

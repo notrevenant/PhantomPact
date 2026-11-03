@@ -1,22 +1,40 @@
 """Builds the local co-op panel's pictures (mod/PBZCoop/art/panel): see-through black, thin silver lines, all text baked
-in, because the mod draws with the game's one-image widget. Needs Pillow: python art/make_local_panel.py"""
+in, because the mod draws with the game's one-image widget. Needs Pillow: python art/make_local_panel.py
+
+Sizes below are in the panel's own units (the Lua places everything in them, 900 x 560 for a whole panel). Each picture is
+drawn at K times that and saved at SCALE times, so it stays sharp when the game stretches the panel to a 1440p or 4K
+screen: the Lua gives every widget its size in panel units, so a bigger picture changes nothing else. The text is EB
+Garamond, kept in art/fonts (SIL Open Font License), so the pictures come out the same on any PC."""
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, features
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "mod", "PBZCoop", "art", "panel")
-FONTS = "C:/Windows/Fonts/"
-K = 3                       # drawn this much bigger, then shrunk, for clean edges
+FONT_DIR = os.path.join(HERE, "fonts")
+K = 6                       # drawn this much bigger than panel units...
+SCALE = 3                   # ...and saved at this, for clean edges and a sharp panel on big screens
 SILVER = (206, 210, 216, 255)
 DIM = (150, 154, 160, 255)
 FAINT = (206, 210, 216, 90)
 BLACK = (6, 7, 9, 205)
 CELL = (14, 15, 18, 215)
 BRIGHT = (255, 255, 255, 255)
+CRIMSON = (178, 24, 30, 255)    # Phantom Pact's red, as on the banner (art/make_art.py)
+
+
+# Lining figures (1 2 3 4, not Garamond's old-style ones, where a 1 reads as a small I) wherever Pillow can ask for them:
+# that needs its text-shaping library (libraqm), as in Pillow's own Windows and Linux wheels.
+if features.check("raqm"):
+    for _name in ("text", "textlength"):
+        def _lining(self, *args, _call=getattr(ImageDraw.ImageDraw, _name), **kwargs):
+            kwargs.setdefault("features", ["lnum"])
+            return _call(self, *args, **kwargs)
+        setattr(ImageDraw.ImageDraw, _name, _lining)
 
 
 def font(size, bold=False):
-    return ImageFont.truetype(FONTS + ("georgiab.ttf" if bold else "georgia.ttf"), size * K)
+    return ImageFont.truetype(os.path.join(FONT_DIR, "EBGaramond12-Bold.ttf" if bold else "EBGaramond12-Regular.ttf"),
+                              round(size * K * 1.12))     # (Garamond is small on its body: this matches the old sizes)
 
 
 def canvas(w, h):
@@ -26,7 +44,21 @@ def canvas(w, h):
 
 def save(img, name):
     w, h = img.size
-    img.resize((w // K, h // K), Image.LANCZOS).save(os.path.join(OUT, name + ".png"))
+    img.resize((w * SCALE // K, h * SCALE // K), Image.LANCZOS).save(os.path.join(OUT, name + ".png"), optimize=True)
+
+
+def shade(d, w, h, top=(10, 11, 14, 214), bottom=(3, 3, 5, 228)):
+    """A whole panel's backing: see-through black, a little lighter at the top, like the game's own menus."""
+    for y in range(h * K):
+        t = y / (h * K - 1)
+        d.line((0, y, w * K, y), fill=tuple(round(a + (b - a) * t) for a, b in zip(top, bottom)))
+
+
+def rule(d, cx, y, half):
+    """The thin line under a title, with a small red diamond at its middle."""
+    d.line(((cx - half) * K, y * K, (cx + half) * K, y * K), fill=FAINT, width=K)
+    r = 4 * K
+    d.polygon([(cx * K, y * K - r), (cx * K + r, y * K), (cx * K, y * K + r), (cx * K - r, y * K)], fill=CRIMSON)
 
 
 def spaced(d, xy, text, f, fill, gap=0, anchor="mm"):
@@ -56,11 +88,11 @@ def corners(d, w, h, size=14, inset=7):
 def background():
     w, h = 900, 560
     img, d = canvas(w, h)
-    d.rectangle((0, 0, w * K, h * K), fill=BLACK)
+    shade(d, w, h)
     frame(d, w, h, FAINT)
     corners(d, w, h)
     spaced(d, (w * K / 2, 42 * K), "LOCAL CO-OP", font(25), BRIGHT, gap=7)
-    d.line(((w / 2 - 170) * K, 67 * K, (w / 2 + 170) * K, 67 * K), fill=FAINT, width=K)
+    rule(d, w / 2, 67, 170)
     spaced(d, (40 * K, 96 * K), "PLAYERS", font(13), DIM, gap=3, anchor="lm")
     spaced(d, (480 * K, 96 * K), "SCREEN", font(13), DIM, gap=3, anchor="lm")
     spaced(d, (40 * K, 214 * K), "CONTROLS", font(13), DIM, gap=3, anchor="lm")
@@ -113,9 +145,10 @@ def card(name, label, sub, face=font):
     w, h = 176, 58
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(26, 27, 31, 240))
+    d.rectangle((0, 0, 3 * K, h * K), fill=CRIMSON)
     frame(d, w, h)
-    d.text((14 * K, 22 * K), label, font=face(15), fill=BRIGHT, anchor="lm")
-    d.text((14 * K, 42 * K), sub, font=face(11), fill=DIM, anchor="lm")
+    d.text((16 * K, 22 * K), label, font=face(15), fill=BRIGHT, anchor="lm")
+    d.text((16 * K, 42 * K), sub, font=face(11), fill=DIM, anchor="lm")
     save(img, name)
 
 
@@ -143,6 +176,7 @@ def button(name, text, red=False, face=font, gap=3):
     w, h = 170, 46
     img, d = canvas(w, h)
     d.rectangle((0, 0, w * K, h * K), fill=(150, 26, 22, 235) if red else (214, 217, 222, 235))
+    d.rectangle((3 * K, 3 * K, (w - 3) * K, (h - 3) * K), outline=(255, 255, 255, 70) if red else (10, 11, 13, 60), width=K)
     spaced(d, (w * K / 2, h * K / 2), text, face(16, True), BRIGHT if red else (10, 11, 13, 255), gap=gap)
     save(img, name)
 
