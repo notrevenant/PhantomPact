@@ -22,7 +22,7 @@ Copy-Item $live $keep -Force
 Copy-Item (Join-Path $folder $Save) $live -Force
 "guest starts from $Save ($((Get-Item $live).Length) bytes)"
 try {
-    $c = Start-DevGame -Role Guest -Instance 2 -Settings @{ ThisPcOnly = 'On' }
+    $c = Start-DevGame -Role Guest -Instance 2
     $c | ConvertTo-Json | Set-Content "$PSScriptRoot\dev-guest.json"
     "gameplay: $(Wait-DevGameplay $c 240) at $(Get-Date -Format HH:mm:ss)"
     Start-Sleep -Seconds 8

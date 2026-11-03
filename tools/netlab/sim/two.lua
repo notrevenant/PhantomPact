@@ -29,6 +29,11 @@ end
 local function story(scripts, extraIni)
     local s = Session.new(scripts, { "Host", "Guest" }, false, ENEMIES, extraIni)
     local host, guest = s.pcs[1], s.pcs[2]
+    -- Revive isn't a setting since 1.6: the command turns it on, on scripts old and new alike.
+    if (extraIni or ""):find("Revive = On", 1, true) then
+        Session.command(host, "revive on")
+        Session.command(guest, "revive on")
+    end
     local t = 0
     local function walk()
         t = t + 1 / 60

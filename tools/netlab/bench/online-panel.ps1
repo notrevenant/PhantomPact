@@ -6,9 +6,12 @@
     Commands go through cmd.txt and run what the buttons run, so nothing takes the focus; F4 is posted to the game's window.
     A real mouse click isn't tested: the clicks here enter at the same point, with panel coordinates.
 
+    The copies connect through Steam only, so the Join and connection checks need two PCs with two Steam accounts that are
+    friends: one account can't reach itself.
+
     -NoStart uses the copies already up and connected (dev-host.json, dev-guest.json) and leaves them as it found them:
     connected, panel closed, game running. Their panel was off at startup, so this repo's onlinepanel.lua is loaded into them
-    (api is an upvalue of coop's event handlers). Without it, two copies start here with OnlinePanel = On. -Look stops after
+    (api is an upvalue of coop's event handlers). Without it, two copies start here. -Look stops after
     the first two pictures, with the panels closed again.
 #>
 param([string]$Shots = $env:TEMP, [switch]$NoStart, [switch]$Look)
@@ -79,7 +82,7 @@ $F4 = 0x73
 function Check([string]$What, [bool]$Ok, [string]$Seen = '') { "$(if ($Ok) { 'PASS' } else { 'FAIL' })  $What  $Seen" }
 function Status($g) { "$(Get-Content (Join-Path $g.Dir 'net_status.txt') -ErrorAction SilentlyContinue)" }
 function Short($g) { $s = Status $g; $s.Substring(0, [Math]::Min(50, $s.Length)) }
-function Ini($g, [string]$Key) { (Get-Content (Join-Path $g.Dir 'PhantomPact.ini') | Where-Object { $_ -match "^\s*$Key\s*=" }) -join ' ' }
+function Ini($g, [string]$Key) { (Get-Content (Join-Path $g.Dir 'settings.txt') -ErrorAction SilentlyContinue | Where-Object { $_ -match "^\s*$Key\s*=" }) -join ' ' }
 function Sockets($g) { @(Get-NetUDPEndpoint -OwningProcess $g.Pid -ErrorAction SilentlyContinue).Count }
 function Shot($g, [string]$Name) { "picture $Name ($([PanelShot.Win]::Save([NetLab.Win]::Unreal($g.Pid), (Join-Path $Shots "$Name.png"))))" }
 
@@ -131,16 +134,14 @@ if ($NoStart) {
     foreach ($g in $a, $b) {
         $p = Get-Process -Id $g.Pid -ErrorAction SilentlyContinue
         if (-not $p -or $p.Path -notlike 'C:\PBZDev\*') { throw "Copy $($g.Pid) isn't running from the dev install." }
-        Set-IniLines (Join-Path $g.Dir 'PhantomPact.ini') @{ OnlinePanel = 'On' }
     }
     # A second run in one session retires the first one's loops: closed, and their F4 does nothing.
     $load = "$findApi if ONLINE_PANEL then if ONLINE_PANEL.open then ONLINE_PANEL.close() end ONLINE_PANEL.show=function() end end " +
         "ONLINE_PANEL=dofile(`"$repoPanel`")(a) a.onlinepanel=ONLINE_PANEL ONLINE_PANEL.start()"
 } else {
     "mod hash " + (Install-DevMod)
-    $s = @{ ThisPcOnly = 'On'; OnlinePanel = 'On' }
-    $a = Start-DevGame -Role Host -Settings $s
-    $b = Start-DevGame -Role Guest -Instance 2 -Settings $s
+    $a = Start-DevGame -Role Host
+    $b = Start-DevGame -Role Guest -Instance 2
     "gameplay: $(Wait-DevGameplay $a 200) $(Wait-DevGameplay $b 120) at $(Get-Date -Format HH:mm:ss)"
     [void](Reaches $b 'connected=yes' 20)
     $load = "$findApi ONLINE_PANEL=a.onlinepanel"
@@ -148,7 +149,7 @@ if ($NoStart) {
 
 $got = (Ask $a 'ONLINE_PANEL ~= nil' $load), (Ask $b 'ONLINE_PANEL ~= nil' $load)
 Check 'panel started by command' (($got[0] -eq 'true') -and ($got[1] -eq 'true')) "$got"
-if (($got[0] -ne 'true') -or ($got[1] -ne 'true')) { throw 'The panel is not in these copies: restart them with OnlinePanel = On.' }
+if (($got[0] -ne 'true') -or ($got[1] -ne 'true')) { throw 'The panel is not in these copies: restart them with this repo's mod.' }
 "start: $(Short $a) | $(Short $b)"
 
 "--- open, on a connected pair"

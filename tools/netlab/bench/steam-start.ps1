@@ -1,4 +1,4 @@
-# Connect = Steam on the dev install: two copies on one account. One account can't reach itself through Steam, so this only
+# Steam on the dev install: two copies on one account. One account can't reach itself through Steam, so this only
 # proves the Steam link starts inside the game and stays up; the real connection needs a second account on another PC.
 # Stops the dev copies first. steam-check.ps1 does the same on the real install.
 param([int]$WatchSeconds = 60)
@@ -7,7 +7,7 @@ Get-Process PBZ -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'C:
 Start-Sleep -Seconds 3
 "mod hash " + (Install-DevMod)
 $began = Get-Date
-$set = @{ Connect = 'Steam'; HostAddress = ''; ThisPcOnly = 'Off' }
+$set = @{}
 foreach ($f in 'relay_log.txt', 'relay_error.txt', 'net_status.txt') {
     Remove-Item (Join-Path (Get-DevDir 1) $f), (Join-Path (Get-DevDir 2) $f) -ErrorAction SilentlyContinue
 }

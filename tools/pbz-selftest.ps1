@@ -1,14 +1,13 @@
 <#
 .SYNOPSIS
     Blood Pact-style self-test for PBZCoop: two copies of the game on this PC. Copy 1 = host (mod folder), copy 2 = client
-    (mod folder\inst2). Each copy gets PBZCOOP_INSTANCE and a PhantomPact.ini for its role, so each mod starts the relay
-    in its main.dll by itself and turns co-op on once it's in gameplay.
+    (mod folder\inst2). Each copy gets PBZCOOP_INSTANCE and a settings.txt for its role (what the F5 panel would have
+    saved), so each mod starts the relay in its main.dll by itself and turns co-op on once it's in gameplay.
+    The relay only connects through Steam Networking, and one Steam account can't reach itself: the two copies start
+    their relays but never connect (steam-check.ps1). A real connection needs a second account on another PC.
 
 .PARAMETER Stop
-    Close the game copies this script started (read from the last run's state file) and put PhantomPact.ini back.
-.PARAMETER Connect
-    Udp: over this PC's loopback (ThisPcOnly), so Windows' firewall has nothing to ask. Steam: through Steam, where one
-    account can't reach itself, so the relays start but never connect (steam-check.ps1).
+    Close the game copies this script started (read from the last run's state file) and put settings.txt back.
 .PARAMETER Exe
     Override the game exe (normally found from the Steam manifest, like pbz-setup.ps1).
 
@@ -18,11 +17,9 @@
 #>
 param(
     [switch]$Stop,
-    [ValidateSet('Udp', 'Steam')][string]$Connect = 'Udp',
     [string]$Exe,
     [string]$SteamLibrary = 'D:\SteamLibrary',
     [int]$SteamAppId = 4115450,
-    [int]$Port = 47800,
     [int]$WindowTimeoutSec = 90
 )
 
@@ -30,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $logsRoot = Join-Path $projectRoot 'logs'
 $statePath = Join-Path $logsRoot 'selftest-last.json'
-$iniKept = Join-Path $logsRoot 'selftest-PhantomPact.ini'    # the ini as it was, until -Stop puts it back
+$kept = Join-Path $logsRoot 'selftest-settings.txt'    # the settings as they were, until -Stop puts them back
 
 if ($Stop) {
     if (-not (Test-Path $statePath)) { Write-Output "No self-test state found."; return }
@@ -42,8 +39,9 @@ if ($Stop) {
     }
     # Back to the settings from before the run, so a normal game start doesn't auto-host.
     if ($state.ModRoot) {
-        if (Test-Path $iniKept) { Move-Item $iniKept (Join-Path $state.ModRoot 'PhantomPact.ini') -Force }
-        Remove-Item (Join-Path $state.ModRoot 'inst2\PhantomPact.ini') -ErrorAction SilentlyContinue
+        if (Test-Path $kept) { Move-Item $kept (Join-Path $state.ModRoot 'settings.txt') -Force }
+        else { Remove-Item (Join-Path $state.ModRoot 'settings.txt') -ErrorAction SilentlyContinue }
+        Remove-Item (Join-Path $state.ModRoot 'inst2\settings.txt') -ErrorAction SilentlyContinue
     }
     return
 }
@@ -84,16 +82,11 @@ if ($saves) {
     Write-Warning "No SaveGames folder found; check where PBZ saves before letting two copies run for long."
 }
 
-# Each mod reads its ini as it loads. A run that failed before its -Stop already kept the real one: that one stays.
-$ini1, $ini2 = (Join-Path $modRoot 'PhantomPact.ini'), (Join-Path $inst2 'PhantomPact.ini')
-if ((Test-Path $ini1) -and -not (Test-Path $iniKept)) { Copy-Item $ini1 $iniKept }
-if ($Connect -eq 'Steam') {
-    Set-Content $ini1 "Role = Host`r`nConnect = Steam" -Encoding ascii
-    Set-Content $ini2 "Role = Guest`r`nConnect = Steam" -Encoding ascii
-} else {
-    Set-Content $ini1 "Role = Host`r`nPort = $Port`r`nThisPcOnly = On" -Encoding ascii
-    Set-Content $ini2 "Role = Guest`r`nHostAddress = 127.0.0.1`r`nPort = $Port`r`nThisPcOnly = On" -Encoding ascii
-}
+# Each mod reads its settings as it loads. A run that failed before its -Stop already kept the real ones: those stay.
+$set1, $set2 = (Join-Path $modRoot 'settings.txt'), (Join-Path $inst2 'settings.txt')
+if ((Test-Path $set1) -and -not (Test-Path $kept)) { Copy-Item $set1 $kept }
+Set-Content $set1 "role=Host" -Encoding ascii
+Set-Content $set2 "role=Guest" -Encoding ascii
 # An earlier run's status would read as connected.
 Remove-Item (Join-Path $modRoot 'net_status.txt'), (Join-Path $inst2 'net_status.txt') -ErrorAction SilentlyContinue
 

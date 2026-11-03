@@ -8,7 +8,7 @@ $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline -and (Get-Process -Id $script:C.Pid -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
 if (Get-Process -Id $script:C.Pid -ErrorAction SilentlyContinue) { Stop-Process -Id $script:C.Pid -Force; Start-Sleep -Seconds 2 }
 "mod hash " + (Install-DevMod)
-$set = @{ Connect = 'Steam'; HostAddress = ''; ThisPcOnly = 'Off'; OnlinePanel = 'On' }
+$set = @{}
 $env:steam_master_ipc_name_override = 'steam2'
 $c = Start-DevGame -Role Guest -Instance 2 -Settings $set
 $c | ConvertTo-Json | Set-Content "$lab\bench\dev-guest.json"

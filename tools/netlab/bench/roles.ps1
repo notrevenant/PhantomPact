@@ -1,7 +1,6 @@
 . (Join-Path $PSScriptRoot 'tourlib.ps1')
 $H = $script:H; $C = $script:C
 foreach ($g in $C, $H) { Send-Dev $g 'onlinepanel leave'; Start-Sleep -Seconds 2 }
-foreach ($g in $C, $H) { Send-Dev $g 'onlinepanel steam'; Start-Sleep -Seconds 1 }
 Send-Dev $H 'onlinepanel host'; Start-Sleep -Seconds 4
 Send-Dev $C 'onlinepanel join'
 $end = (Get-Date).AddSeconds(40)

@@ -1,7 +1,7 @@
 # One copy on its own, as the guest on the second Steam: no password needed, and its enemies are its own once it finds no host.
 $lab = 'C:\Users\TheCo\Downloads\PhantomPact-online\tools\netlab'
 . (Join-Path $lab 'dev.ps1')
-$set = @{ Connect = 'Steam'; HostAddress = ''; ThisPcOnly = 'Off'; OnlinePanel = 'On' }
+$set = @{}
 $env:steam_master_ipc_name_override = 'steam2'
 $c = Start-DevGame -Role Guest -Instance 2 -Settings $set
 $c | ConvertTo-Json | Set-Content "$lab\bench\dev-guest.json"

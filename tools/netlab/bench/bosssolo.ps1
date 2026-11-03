@@ -11,7 +11,7 @@ if (Get-Process -Id $C.Pid -ErrorAction SilentlyContinue) {
     while ((Get-Date) -lt $deadline -and (Get-Process -Id $C.Pid -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
 }
 $env:steam_master_ipc_name_override = 'steam2'
-$c2 = Start-DevGame -Role Off -Instance 2 -Settings @{ Connect = 'Steam'; HostAddress = ''; ThisPcOnly = 'Off'; OnlinePanel = 'On' }
+$c2 = Start-DevGame -Role Off -Instance 2
 $c2 | ConvertTo-Json | Set-Content "$lab\bench\dev-guest.json"
 "alone: pid $($c2.Pid)"
 Start-Sleep -Seconds 20

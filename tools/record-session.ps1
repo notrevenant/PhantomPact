@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
     Records a real co-op session for debugging: UE4SS.log from every launch (the game overwrites it on each start),
-    crash dumps, every line of net_status.txt with memory use, and how Tailscale reaches the partner (direct or
-    relayed). Waits for PBZ.exe, and stops by itself once the game has been closed for -GoneMinutes. Any Secret in the
-    ini is left out of the copy.
+    crash dumps, every line of net_status.txt with memory use, and the settings the panels saved (settings.txt). Whether
+    Steam reaches the partner directly or through its relays is in each status line (route=). Waits for PBZ.exe, and
+    stops by itself once the game has been closed for -GoneMinutes.
 
     Reads only; changes nothing in the game (-Perf is the one exception, see below).
 
@@ -96,12 +96,12 @@ function Write-Summary([string]$Folder) {
     $out.Add("Phantom Pact session $(Split-Path $Folder -Leaf). docs\NETCODE.md has the numbers to set these against.")
     foreach ($failure in ($failures | Select-Object -Unique)) { $out.Add("The relay failed: $failure") }
     if (-not $last) {
-        $out.Add('The relay never reported: check Role in PhantomPact.ini, dlls\main.dll, and any relay_error.txt here.')
+        $out.Add('The relay never reported: check that Host or Guest was pressed in the F5 panel, dlls\main.dll, and any relay_error.txt here.')
     } else {
         $out.Add("Recorded $($lines.Count) status lines, $($lines[0].Substring(0, 8)) to $($lines[-1].Substring(0, 8)), memory peak $memMost MB.")
-        $out.Add("$($last.role) via $($last.via), version $($last.version), partner $($last.partner_version), partner's map $($last.partner_map), signed $($last.auth)")
+        $out.Add("$($last.role) via $($last.via), version $($last.version), partner $($last.partner_version), partner's map $($last.partner_map), route $($last.route)")
         $out.Add("Connected in $connected of $($lines.Count) lines ($('{0:0.#}' -f (100 * $connected / $lines.Count))%). Drops: $drops. Settings that differ: $($last.mismatch)")
-        $out.Add("Refused packets: $($last.filtered) filtered, $($last.rejected) rejected")
+        $out.Add("Refused packets: $($last.filtered) filtered, $($last.refused) sends Steam refused")
         $out.Add('')
         $out.Add("Ping (rtt_ms)                $(Spread $rtt)")
         $out.Add("Jitter (jitter_ms)           $(Spread $jitter)")
@@ -132,7 +132,6 @@ if ($Summarize) {
 $folder = Join-Path $Out (Get-Date -Format 'yyyyMMdd-HHmmss')
 New-Item -ItemType Directory -Force $folder | Out-Null
 $began = Get-Date
-$tailscale = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
 function Note([string]$File, [string]$Text) { Add-Content (Join-Path $folder $File) "$(Get-Date -Format 'HH:mm:ss.fff') $Text" -Encoding utf8 }
 Note 'recorder.txt' "recording to $folder"
 
@@ -140,7 +139,7 @@ Note 'recorder.txt' "recording to $folder"
 $perfEval = 'eval local net,n,t0=PBZ.net,0,os.clock() net.profile={} PBZ.coop.frameTicks.record=function() n=n+1 local now=os.clock() if now-t0<10 then return end local s=0 for _,p in pairs(net.profile or {}) do s=s+p.t end PBZ.log(string.format("PERF session fps=%.1f mod_ms_s=%.1f",n/(now-t0),s*1000/(now-t0))) net.profile={} n,t0=0,now end return "session perf on"'
 
 $seenAt, $ue4ss, $described, $stamp, $statusLine, $relayUp, $perfFor = $null, $null, $false, $null, '', $null, $null
-$nextCopy, $nextPing = $began, $began
+$nextCopy = $began
 try {
     while (((Get-Date) - $began).TotalHours -lt $MaxHours) {
         # The launcher is also PBZ.exe, elsewhere and small: the real game is the one beside ue4ss.
@@ -151,7 +150,7 @@ try {
             $mod = Join-Path $ue4ss 'Mods\PBZCoop'
             if (-not $described) {
                 $described = $true
-                Get-Content (Join-Path $mod 'PhantomPact.ini') | Where-Object { $_ -notmatch '^\s*Secret\s*=' } | Set-Content (Join-Path $folder 'PhantomPact.ini')
+                Copy-Item (Join-Path $mod 'settings.txt') (Join-Path $folder 'settings.txt') -ErrorAction SilentlyContinue
                 Note 'setup.txt' "main.dll $((Get-FileHash (Join-Path $mod 'dlls\main.dll')).Hash)"
                 Get-NetConnectionProfile | ForEach-Object { Note 'setup.txt' "network: $($_.InterfaceAlias) $($_.NetworkCategory)" }
                 # Throws when the exe has no rule, which is worth knowing too (Windows never asked, or the prompt was missed).
@@ -173,7 +172,7 @@ try {
             }
             if ($up -ne $relayUp) {
                 $relayUp = $up
-                Note 'recorder.txt' $(if ($up) { 'relay running' } else { 'relay not running: no fresh net_status.txt (Role in the ini, dlls\main.dll, relay_error.txt)' })
+                Note 'recorder.txt' $(if ($up) { 'relay running' } else { 'relay not running: no fresh net_status.txt (Host or Guest in F5, dlls\main.dll, relay_error.txt)' })
             }
             if ($Perf -and $up -and $perfFor -ne $stamp) {
                 $perfFor = $stamp
@@ -188,12 +187,6 @@ try {
                 $nextCopy = (Get-Date).AddSeconds(10)
                 Copy-Item (Join-Path $ue4ss 'UE4SS.log') (Join-Path $folder "UE4SS-$stamp.log") -Force
                 foreach ($f in 'relay_log.txt', 'relay_error.txt') { Copy-Item (Join-Path $mod $f) (Join-Path $folder "$stamp-$f") -Force }
-            }
-            if ((Get-Date) -ge $nextPing -and (Test-Path $tailscale) -and $statusLine -match 'peer=(\d+\.\d+\.\d+\.\d+)') {
-                $nextPing = (Get-Date).AddSeconds(30)
-                $peer = $Matches[1]
-                Note 'tailscale.log' ("ping: " + ((& $tailscale ping --c 1 --timeout 3s $peer 2>&1 | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join ' | '))
-                Note 'tailscale.log' ("status: " + ((& $tailscale status 2>&1 | Where-Object { "$_" -match [regex]::Escape($peer) } | ForEach-Object { "$_".Trim() }) -join ' | '))
             }
         } elseif ($seenAt -and ((Get-Date) - $seenAt).TotalMinutes -ge $GoneMinutes) {
             break

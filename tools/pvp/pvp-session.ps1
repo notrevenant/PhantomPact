@@ -1,4 +1,4 @@
-# Starts two PBZ copies (selftest, whose PhantomPact.ini files make them host and client) and gets both into gameplay,
+# Starts two PBZ copies (selftest, whose settings.txt files make them host and client) and gets both into gameplay,
 # where the mods turn sync on by themselves. Waits for the link, then leaves everything running for interactive PvP
 # recon via Send-ModCommand.
 $ErrorActionPreference = 'Stop'

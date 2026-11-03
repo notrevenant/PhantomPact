@@ -52,16 +52,14 @@ namespace NetLab { public static class Win {
 '@
 }
 
-function Set-IniLines([string]$Path, [hashtable]$Values) {
-    $lines = if (Test-Path $Path) { @(Get-Content $Path) } else { @() }
-    foreach ($key in $Values.Keys) {
-        $hit = $false
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match "^\s*$key\s*=") { $lines[$i] = "$key = $($Values[$key])"; $hit = $true }
-        }
-        if (-not $hit) { $lines += "$key = $($Values[$key])" }
+# The mod's settings.txt (what the F5 panel saves): key=value lines, keys in lowercase. Only these keys change.
+function Set-DevSettings([string]$Path, [hashtable]$Values) {
+    $kept = [ordered]@{}
+    if (Test-Path $Path) {
+        foreach ($line in Get-Content $Path) { if ($line -match '^\s*([\w]+)\s*=\s*(.*?)\s*$') { $kept[$Matches[1].ToLower()] = $Matches[2] } }
     }
-    Set-Content $Path $lines -Encoding ascii
+    foreach ($key in $Values.Keys) { $kept[$key.ToLower()] = "$($Values[$key])" }
+    Set-Content $Path ($kept.Keys | Sort-Object | ForEach-Object { "$_=$($kept[$_])" }) -Encoding ascii
 }
 
 # Copies the mod and main.dll from this repo over the dev install (running copies keep their old main.dll loaded).
@@ -81,16 +79,16 @@ function Get-DevDir([int]$Instance) {
     return $dir
 }
 
-# Starts a copy and returns @{ Pid; Dir; Instance }. -Settings: more PhantomPact.ini lines.
+# Starts a copy and returns @{ Pid; Dir; Instance }. -Settings: more settings.txt values (PvP, FourPlayers...).
+# The relay connects only through Steam, and one Steam account can't reach itself: copies on one PC start their relays but
+# never connect to each other. -Port is ignored, kept so older bench scripts still run.
 function Start-DevGame {
     param([ValidateSet('Host', 'Guest', 'Off')][string]$Role = 'Host', [int]$Instance = 1, [int]$Port = 47810,
           [hashtable]$Settings = @{}, [int]$Width = 960, [int]$Height = 540)
     $dir = Get-DevDir $Instance
-    $ini = Join-Path $dir 'PhantomPact.ini'
-    if ($Instance -gt 1) { Copy-Item (Join-Path $script:RepoRoot 'mod\PBZCoop\PhantomPact.ini') $ini -Force }
-    $values = @{ Role = $Role; Port = $Port; Connect = 'Tailscale'; HostAddress = '127.0.0.1' }
+    $values = @{ Role = $Role }
     foreach ($k in $Settings.Keys) { $values[$k] = $Settings[$k] }
-    Set-IniLines $ini $values
+    Set-DevSettings (Join-Path $dir 'settings.txt') $values
     Remove-Item (Join-Path $dir 'cmd.txt') -ErrorAction SilentlyContinue
     $exe = Join-Path $script:GameDir 'PBZ.exe'
     $base = Join-Path $script:DevRoot 'ProjectPBZ\Binaries\Win64'

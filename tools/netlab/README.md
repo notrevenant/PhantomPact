@@ -2,6 +2,11 @@
 
 Everything here tests the relay and the sync on one PC.
 
+Players only ever connect through Steam Networking (native/steam.cpp). Steam can't connect an account to itself, so on one
+PC the relay is tested through `relay_cli`'s loopback link (native/loopback_link.hpp, never shipped), and game copies on
+one PC start their relays but never connect: a real two-player game needs two PCs with two Steam accounts that are
+friends.
+
 ## No game needed
 
     .\tools\netlab\all.ps1                                    (all of the below; the last line says PASS or FAIL)
@@ -9,9 +14,9 @@ Everything here tests the relay and the sync on one PC.
     .\tools\netlab\bench.ps1 -Delay 40 -Jitter 20 -Loss 2 -StallEvery 6 -StallMs 250
     .\tools\netlab\restart-test.ps1
 
-`relay_cli test` runs real relays against simulated connections, broken packets and a fuzz loop, then real sockets. `bench.ps1`
+`relay_cli test` runs real relays against simulated connections, broken packets and a fuzz loop, then loopback sockets. `bench.ps1`
 runs two bots through a bad connection and prints true delays, since both share the PC's clock. `restart-test.ps1` is separate
-processes: restarts, Secrets, an old partner, garbage, the sure lane at 5% and 30% loss. Bots bind to loopback only, so
+processes: restarts, an old partner, garbage, the sure lane at 5% and 30% loss. Bots bind to loopback only, so
 Windows' firewall doesn't ask anything.
 
 ### Four players, and two players not changing
@@ -61,7 +66,7 @@ window, so nothing takes the focus.
 | `online-panel.ps1` | The F4 online panel: Host, Join, Leave, a refused Host, swapped roles, with PASS or FAIL per check |
 | `rejoin.ps1` | The host quits hard and comes back while the guest plays on |
 | `twosaves.ps1 [-Save <file>]` | The guest starts from an older save, as a second account would. The save is put back after |
-| `steam-start.ps1` | `Connect = Steam` on two copies: proves the link starts in the game. One account can't reach itself |
+| `steam-start.ps1` | Two copies over Steam: proves the link starts in the game. One account can't reach itself |
 
 `dev-start.ps1 -Role Host` restarts nothing: stop your old copies first. Only ever stop a process whose path is under
 `C:\PBZDev`.
@@ -89,7 +94,8 @@ With the host running as a second Windows user, tools must sit where that user c
 `perf.lua` and `pair.lua` are loaded into a running copy with `eval dofile("<path>")`, and provide `PERF.*` and `PAIR.*`.
 `pair_report.py` compares two recordings.
 
-Run the game with `Role = Host`/`Guest` and `ThisPcOnly = On` (dev-start sets it), which binds to loopback.
+`Start-DevGame -Role Host`/`Guest` writes the copy's `settings.txt`, as the F5 panel would. The scripts above that need the two
+copies connected (walks, fights, joining) need them on two PCs, each with its own Steam account, friends with each other.
 
 ## Rules that keep tests honest and the game safe
 

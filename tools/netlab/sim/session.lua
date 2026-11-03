@@ -13,12 +13,9 @@ local function ini(role, four, extra)
 end
 
 -- roles: "Host", "Guest"... in the order they are PCs 1, 2...; enemies: { { id, class, x, y, z, hp, posture, boss }... }
--- The ini as it ships, for what a fresh install does.
+-- What a fresh install has: no settings at all. (A false wholeIni: Session.new writes no file.)
 function Session.shippedIni()
-    local f = assert(io.open(SIM_REPO .. "/mod/PBZCoop/PhantomPact.ini", "rb"))
-    local text = f:read("a")
-    f:close()
-    return text
+    return false
 end
 
 function Session.new(scripts, roles, party, enemies, extraIni, wholeIni)
@@ -33,7 +30,11 @@ function Session.new(scripts, roles, party, enemies, extraIni, wholeIni)
     end
     for i, role in ipairs(roles) do
         local link = {}
-        local pc = Fake.new("pc" .. i, scripts, wholeIni or ini(role, party == true and i == 1, extraIni), link)
+        local text = wholeIni
+        if text == nil then
+            text = ini(role, party == true and i == 1, extraIni)
+        end
+        local pc = Fake.new("pc" .. i, scripts, text or nil, link)
         for k, v in pairs(self.relay:linkFor(pc)) do
             link[k] = v
         end

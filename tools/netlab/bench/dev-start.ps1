@@ -1,4 +1,4 @@
-param([string]$Role = 'Host', [int]$Instance = 1, [hashtable]$Settings = @{ ThisPcOnly = 'On' }, [switch]$NoInstall)
+param([string]$Role = 'Host', [int]$Instance = 1, [hashtable]$Settings = @{}, [switch]$NoInstall)
 . (Join-Path $PSScriptRoot '..\dev.ps1')
 if (-not $NoInstall) { "mod hash " + (Install-DevMod) }
 $g = Start-DevGame -Role $Role -Instance $Instance -Settings $Settings

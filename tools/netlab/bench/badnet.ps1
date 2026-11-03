@@ -13,7 +13,7 @@ $load = "dofile(`"$lab/perf.lua`") dofile(`"$lab/pair.lua`")"
 Stop-DevGame $c
 Start-Sleep -Seconds 2
 $netem = Start-Process $cli -ArgumentList (@('netem', 47811, 47810, '--seconds', 400) + ($Via -split ' ')) -PassThru -WindowStyle Hidden
-$c = Start-DevGame -Role Guest -Instance 2 -Port 47811 -Settings @{ ThisPcOnly = 'On' }
+$c = Start-DevGame -Role Guest -Instance 2 -Port 47811
 $c | ConvertTo-Json | Set-Content "$PSScriptRoot\dev-guest.json"
 "guest pid $($c.Pid), netem pid $($netem.Id)"
 $ok = Wait-DevGameplay $c 200

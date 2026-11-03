@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    The relay as separate processes over real sockets, no game needed: one side going away and coming back, Secrets, an old
-    partner, garbage, and the sure lane through a bad connection. What relay_cli test can't show from inside one process.
+    The relay as separate processes over loopback sockets (relay_cli's test link), no game needed: one side going away and
+    coming back, an old partner, garbage, and the sure lane through a bad connection. What relay_cli test can't show from
+    inside one process.
     Ends with a line saying how many checks failed, and exit code 1 if any did.
 
 .EXAMPLE
@@ -92,32 +93,6 @@ $c2 = Bot 'client' 6 'c6.txt' @('--event-every', 0.05)
 Check ((Field 'h5.txt' 'connected') -eq 'yes') 'the host takes the new guest'
 Check ((Field 'h5.txt' 'wrong_order') -eq '0') 'events stayed in order on the host'
 Check ([int](Field 'c6.txt' 'got') -gt 50) "the new guest hears the host ($(Field 'c6.txt' 'got') events)"
-
-'== the same Secret on both'
-Set-Content "$work\secret.ini" 'Secret = four random words here' -Encoding ascii
-Set-Content "$work\other.ini" 'Secret = another four words here' -Encoding ascii
-$h = Bot 'host' 6 'h3.txt' @('--ini', "$work\secret.ini")
-Start-Sleep -Milliseconds 600
-$c = Bot 'client' 5 'c3.txt' @('--ini', "$work\secret.ini")
-[void]$c.WaitForExit(12000)
-[void]$h.WaitForExit(5000)
-Check ((Field 'c3.txt' 'connected') -eq 'yes' -and (Field 'c3.txt' 'auth') -eq 'on') 'they connect, signed'
-Check ([int](Field 'c3.txt' 'got') -gt 10 -and (Field 'c3.txt' 'wrong_order') -eq '0') "events flow ($(Field 'c3.txt' 'got'))"
-
-'== different Secrets, and a Secret on one side'
-$h = Bot 'host' 5 'h4.txt' @('--ini', "$work\secret.ini")
-Start-Sleep -Milliseconds 600
-$c = Bot 'client' 3 'c4.txt' @('--ini', "$work\other.ini")
-[void]$c.WaitForExit(9000)
-[void]$h.WaitForExit(5000)
-Check ((Field 'h4.txt' 'connected') -eq 'no' -and (Field 'h4.txt' 'rejected') -ne '0') "different Secrets never connect ($(Field 'h4.txt' 'rejected') refused)"
-Check ((Field 'c4.txt' 'got') -eq '0') 'and the guest heard nothing'
-$h = Bot 'host' 5 'h7.txt' @('--ini', "$work\secret.ini")
-Start-Sleep -Milliseconds 600
-$c = Bot 'client' 3 'c7.txt'
-[void]$c.WaitForExit(9000)
-[void]$h.WaitForExit(5000)
-Check ((Field 'h7.txt' 'connected') -eq 'no' -and (Field 'h7.txt' 'rejected') -ne '0') 'a Secret on the host alone never connects'
 
 '== an old partner, garbage, and then the real one'
 $p = $Port + 5

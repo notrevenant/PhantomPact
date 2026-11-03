@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
     Builds the player package dist\PhantomPact-<version>.zip, laid out like the game folder: players extract it into
-    ...\steamapps\common\PBZ and it lands in platform\steam\ue4ss\Mods\PBZCoop. Settings are in PhantomPact.ini; the
-    mod starts the relay itself (autostart.lua), the built-in one in dlls\main.dll. No .bat/.ps1 files, and no
+    ...\steamapps\common\PBZ and it lands in platform\steam\ue4ss\Mods\PBZCoop. There's no settings file to ship: players
+    set everything in the game's F5 panel, which the mod keeps in settings.txt. The mod starts the relay itself
+    (autostart.lua), the built-in one in dlls\main.dll, which connects through Steam Networking. No .bat/.ps1 files, and no
     other binaries: Nexus quarantines scripts and quarantined a bundled Python for its .exe files (1.3.1).
     Only what's listed here goes in, so runtime files the mod writes while playing (cmd.txt, net_*.txt, relay_log.txt,
-    inst2\) and developer files (dev.txt, relay_cli.exe, tools\, net\) stay out, and a check refuses the zip if one
-    gets in, or if the ini isn't the default one.
+    settings.txt, inst2\) and developer files (dev.txt, relay_cli.exe, tools\, net\) stay out, and a check refuses the
+    zip if one gets in.
 
 .EXAMPLE
     .\tools\make-release.ps1
@@ -23,7 +24,7 @@ New-Item -ItemType Directory -Force (Join-Path $mod 'Scripts') | Out-Null
 
 Copy-Item (Join-Path $root 'INSTALL.md') (Join-Path $stage 'Phantom Pact - INSTALL.md')
 Copy-Item (Join-Path $root 'docs\LOCAL_COOP.md') (Join-Path $stage 'Phantom Pact - LOCAL CO-OP.md')
-foreach ($f in 'enabled.txt', 'PhantomPact.ini') { Copy-Item (Join-Path $root "mod\PBZCoop\$f") $mod }
+Copy-Item (Join-Path $root 'mod\PBZCoop\enabled.txt') $mod
 Copy-Item (Join-Path $root 'mod\PBZCoop\Scripts\*.lua') (Join-Path $mod 'Scripts')
 # The PvP victory calligraphy (生还, painted in Lumina), loaded by pbz.lua at run time.
 New-Item -ItemType Directory -Force (Join-Path $mod 'art') | Out-Null
@@ -35,18 +36,14 @@ $dll = Join-Path $mod 'dlls\main.dll'
 New-Item -ItemType Directory -Force (Split-Path $dll) | Out-Null
 Copy-Item (Join-Path $root 'native\build\main.dll') $dll
 
-# Players get the mod and nothing else: no Python, no test tools, no switches or addresses from a developer's PC.
+# Players get the mod and nothing else: no Python, no test tools, no settings from a developer's PC.
 $devFiles = Get-ChildItem $stage -Recurse -File | Where-Object {
     '.py', '.pyc', '.pdb', '.obj', '.exp', '.lib', '.log', '.tmp' -contains $_.Extension.ToLower() -or
-    'dev.txt', 'cmd.txt', 'relay_log.txt', 'relay_error.txt', 'perf.lua', 'pair.lua' -contains $_.Name.ToLower() -or
+    'dev.txt', 'cmd.txt', 'relay_log.txt', 'relay_error.txt', 'settings.txt', 'perf.lua', 'pair.lua' -contains $_.Name.ToLower() -or
+    '.ini' -eq $_.Extension.ToLower() -or
     $_.Name -like 'net_*.txt' -or $_.Name -like 'pads*.txt' -or $_.Name -eq 'mouse.txt'
 }
 if ($devFiles) { throw "Not for players: $(($devFiles | ForEach-Object Name) -join ', ')" }
-$ini = Get-Content (Join-Path $mod 'PhantomPact.ini') -Raw
-foreach ($setting in '(?m)^Role = Off\s*$', '(?m)^HostAddress = PUT-THE-HOSTS-TAILSCALE-IP-HERE\s*$', '(?m)^Secret =[ \t]*\r?$') {
-    if ($ini -notmatch $setting) { throw "PhantomPact.ini isn't the default one (expected $setting)." }
-}
-if ($ini -match '(?mi)^\s*ThisPcOnly') { throw "PhantomPact.ini has ThisPcOnly, which is for tests: players couldn't connect." }
 
 $zip = "$stage.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip

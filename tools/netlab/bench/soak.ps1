@@ -16,9 +16,9 @@ $began = Get-Date
 "mod hash " + (Install-DevMod)
 $dumps = @(Get-ChildItem $ue -Filter 'crash_*.dmp' -ErrorAction SilentlyContinue).Count
 $netem = Start-Process $cli -ArgumentList (@('netem', 47811, 47810, '--seconds', ($Minutes * 60 + 400)) + ($Via -split ' ')) -PassThru -WindowStyle Hidden
-$h = Start-DevGame -Role Host -Settings @{ ThisPcOnly = 'On'; OnlinePanel = 'On' }
+$h = Start-DevGame -Role Host
 Start-Sleep -Seconds 3
-$c = Start-DevGame -Role Guest -Instance 2 -Port 47811 -Settings @{ ThisPcOnly = 'On'; OnlinePanel = 'On' }
+$c = Start-DevGame -Role Guest -Instance 2 -Port 47811
 $h | ConvertTo-Json | Set-Content "$PSScriptRoot\dev-host.json"
 $c | ConvertTo-Json | Set-Content "$PSScriptRoot\dev-guest.json"
 "host $($h.Pid), guest $($c.Pid), started $(Get-Date -Format HH:mm:ss)"

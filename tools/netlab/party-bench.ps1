@@ -15,16 +15,16 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $cli = if ($Cli) { $Cli } else { Join-Path $root 'native\build\relay_cli.exe' }
 $work = if ($Work) { $Work } else { Join-Path $env:TEMP 'pp-party' }
 New-Item -ItemType Directory -Force "$work\h", "$work\g1", "$work\g2", "$work\g3" | Out-Null
-$ini = Join-Path $work 'four.ini'
-"FourPlayers = On`n" | Set-Content $ini -Encoding ascii
+$settings = Join-Path $work 'four.txt'
+"fourplayers=on`n" | Set-Content $settings -Encoding ascii
 $common = @('--seconds', $Seconds, '--events-for', ($Seconds - 2))
 $procs = @()
-$procs += Start-Process $cli -ArgumentList (@('bot', 'host', '--port', $Port, '--dir', "$work\h", '--ini', $ini, '--enemies', $Enemies) + $common) -PassThru -WindowStyle Hidden -RedirectStandardOutput "$work\host.txt"
+$procs += Start-Process $cli -ArgumentList (@('bot', 'host', '--port', $Port, '--dir', "$work\h", '--settings', $settings, '--enemies', $Enemies) + $common) -PassThru -WindowStyle Hidden -RedirectStandardOutput "$work\host.txt"
 Start-Sleep -Milliseconds 300
 foreach ($n in 1, 2, 3) {
     $front = $Port + $n
     $procs += Start-Process $cli -ArgumentList @('netem', $front, $Port, '--delay', $Delay, '--jitter', $Jitter, '--loss', $Loss, '--seconds', ($Seconds + 6)) -PassThru -WindowStyle Hidden -RedirectStandardOutput "$work\netem$n.txt"
-    $procs += Start-Process $cli -ArgumentList (@('bot', 'client', '--peer', '127.0.0.1', '--port', $front, '--dir', "$work\g$n") + $common) -PassThru -WindowStyle Hidden -RedirectStandardOutput "$work\guest$n.txt"
+    $procs += Start-Process $cli -ArgumentList (@('bot', 'client', '--port', $front, '--dir', "$work\g$n") + $common) -PassThru -WindowStyle Hidden -RedirectStandardOutput "$work\guest$n.txt"
 }
 # What the host sends, halfway through, when all of them are at it.
 Start-Sleep -Seconds ([int]($Seconds / 2) + 1)

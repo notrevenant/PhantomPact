@@ -1,4 +1,4 @@
-# Connect = Steam on one PC: two copies (host + guest, same Steam account), each mod starts the relay in its main.dll over
+# Steam on one PC: two copies (host + guest, same Steam account), each mod starts the relay in its main.dll over
 # Steam, sharing the game's own Steam connection. One account can't reach itself through Steam, so this proves the Steam
 # link starts inside the game (Steam starts in the relay, games stay up, no mod errors); the real connection needs a
 # second Steam account on another PC.
@@ -15,7 +15,7 @@ Start-Sleep 3
 & (Join-Path $PSScriptRoot 'install-mod.ps1') -GameWin64 $GameWin64 | Out-Null
 $modRoot = Join-Path $GameWin64 'ue4ss\Mods\PBZCoop'
 $t0 = Get-Date
-& (Join-Path $PSScriptRoot 'pbz-selftest.ps1') -Connect Steam | Out-Null
+& (Join-Path $PSScriptRoot 'pbz-selftest.ps1') | Out-Null
 $state = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) 'logs\selftest-last.json') -Raw | ConvertFrom-Json
 $games = @($state.Games)
 Check 'two copies start' ($games.Count -eq 2) "$($games -join ', ')"

@@ -721,9 +721,11 @@ local function sitsForTwo()
     check(net(g).partnerFighting ~= true, "for good: nothing says the fight is on again")
     allErrors(s)
 
-    local r = Session.new(SIM_SCRIPTS, { "Host", "Guest" }, false, ENEMIES, "Revive = On\n")
-    r:run(4)
+    local r = Session.new(SIM_SCRIPTS, { "Host", "Guest" }, false, ENEMIES)
     local rh, rg = r.pcs[1], r.pcs[2]
+    Session.command(rh, "revive on")
+    Session.command(rg, "revive on")
+    r:run(4)
     Session.moveTo(rh, 0, 0)
     Session.moveTo(rg, 500, 0)
     r:run(2)
@@ -840,8 +842,12 @@ local function scaling()
     check(select(1, max(h, "boss")) == 12500, "the fight's over and it lived: now it rises")
     allErrors(w)
 
-    local v = party(nil, "CoopEnemyHealth = 100\nCoopEnemyPosture = 100\n")
-    v:run(6)
+    -- (Before anyone joins: an enemy is scaled once, when the party first reaches it.)
+    local v = Session.new(SIM_SCRIPTS, { "Host", "Guest", "Guest", "Guest" }, true, ENEMIES)
+    for _, pc in ipairs(v.pcs) do
+        Session.command(pc, "scale 100 100")
+    end
+    v:run(10)
     check(select(1, max(v.pcs[1], "thug1")) == 600, "100 stays 100, with any number of players")
     allErrors(v)
 end
@@ -982,10 +988,25 @@ local function devUnits()
     allErrors(s)
 end
 
+-- A value in a PC's settings.txt, by lowercase key, or nil.
+local function setting(pc, key)
+    for line in (pc.files["settings.txt"] or ""):gmatch("[^\r\n]+") do
+        local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+        if k and k:lower() == key then
+            return v
+        end
+    end
+    return nil
+end
+
+local function setRole(pc, role)
+    pc.files["settings.txt"] = (pc.files["settings.txt"] or ""):gsub("[Rr]ole%s*=%s*%w+", "role=" .. role, 1)
+end
+
 local function modeRow()
     part("the Mode row")
     local function roleOf(pc)
-        return pc.files["PhantomPact.ini"]:match("\nRole = (%w+)") or pc.files["PhantomPact.ini"]:match("^Role = (%w+)")
+        return setting(pc, "role") or "Off"
     end
     local function shown(pc)
         pc.logs = {}
@@ -995,7 +1016,7 @@ local function modeRow()
     local fresh = Session.new(SIM_SCRIPTS, { "Off" }, false, ENEMIES, nil, Session.shippedIni())
     fresh:run(2)
     local pc = fresh.pcs[1]
-    check(roleOf(pc) == "Off", "a fresh install's ini says Role = Off")
+    check(pc.files["settings.txt"] == nil and roleOf(pc) == "Off", "a fresh install has no settings, so co-op is off")
     Session.command(pc, "onlinepanel press 700 500")
     fresh:run(1)
     shown(pc)
@@ -1026,17 +1047,17 @@ local function modeRow()
     Session.command(pc, MULTIPLAYER)
     s:run(1)
     check(roleOf(pc) == "Off", "MULTIPLAYER writes Role = Off over Local")
-    check(pc.files["PhantomPact.ini"]:find("CoopEnemyHealth = 150\n", 1, true) ~= nil and pc.files["PhantomPact.ini"]:find("FourPlayers = Off\n", 1, true) ~= nil, "and nothing else")
+    check(setting(pc, "coopenemyhealth") == "150" and setting(pc, "fourplayers") == "Off", "and nothing else")
 
     -- Never over a Host or Guest, even if the row still says LOCAL.
     for _, role in ipairs({ "Host", "Guest" }) do
         Session.command(pc, LOCAL)
         s:run(1)
-        pc.files["PhantomPact.ini"] = pc.files["PhantomPact.ini"]:gsub("Role = %w+", "Role = " .. role, 1)
+        setRole(pc, role)
         Session.command(pc, MULTIPLAYER)
         s:run(1)
         check(roleOf(pc) == role, "MULTIPLAYER leaves Role = " .. role .. " alone")
-        pc.files["PhantomPact.ini"] = pc.files["PhantomPact.ini"]:gsub("Role = %w+", "Role = Off", 1)
+        setRole(pc, "Off")
     end
 
     -- Host, Guest and Leave write Role too: the row goes by what's there each time the page opens.
@@ -1083,18 +1104,14 @@ local function modeRow()
     l:run(1)
     check(roleOf(pc) == "Off", "F4's MULTIPLAYER button writes Role = Off")
     check(count(pc.logs, "Multiplayer starts the next time you start the game%.") == 1, "and says when")
-
-    local o = Session.new(SIM_SCRIPTS, { "Local" }, false, ENEMIES, nil, "Role = Local\nOnlinePanel = Off\nConnect = Tailscale\nHostAddress = 10.0.0.1\n")
-    o:run(1)
-    pc = o.pcs[1]
-    Session.command(pc, "panel press 100 500")
-    o:run(1)
-    check(roleOf(pc) == "Off" and pc.files["PhantomPact.ini"]:match("OnlinePanel = (%w+)") == "On", "from an ini with OnlinePanel = Off, it turns F5 back on as well")
 end
 
 local function offThings()
     part("what stays two-player")
-    local s = party(nil, "PvP = On\nPvPDamage = 100\nRevive = On\n")
+    local s = party(nil, "PvP = On\n")
+    for _, pc in ipairs(s.pcs) do
+        Session.command(pc, "revive on")
+    end
     spread(s)
     s:run(3)
     check(s.pcs[1].env.PBZ.net.pvp ~= true, "PvP stays off on a host in a party")
@@ -1214,15 +1231,15 @@ local function panel()
     Session.command(h, "onlinepanel press 700 500")      -- MORE
     Session.command(h, "onlinepanel press 441 430")      -- the row's ON
     s:run(1)
-    check(h.files["PhantomPact.ini"]:find("FourPlayers = On\n", 1, true) ~= nil, "ON is kept in the ini")
-    check(h.files["PhantomPact.ini"]:find("Role = Host\n", 1, true) ~= nil and h.files["PhantomPact.ini"]:find("CoopEnemyHealth = 150\n", 1, true) ~= nil, "and nothing else moves")
+    check(setting(h, "fourplayers") == "On", "ON is kept in settings.txt")
+    check(setting(h, "role") == "Host" and setting(h, "coopenemyhealth") == "150", "and nothing else moves")
     Session.command(h, "onlinepanel press 305 430")      -- OFF
     s:run(1)
-    check(h.files["PhantomPact.ini"]:find("FourPlayers = Off\n", 1, true) ~= nil, "OFF too")
+    check(setting(h, "fourplayers") == "Off", "OFF too")
     Session.command(h, "onlinepanel press 305 100")      -- the TP row, moved up to fit
     Session.command(h, "onlinepanel press 441 100")
     s:run(1)
-    check(h.files["PhantomPact.ini"]:find("PartnerTeleport = On\n", 1, true) ~= nil, "the rows that moved up still answer where they're drawn")
+    check(setting(h, "partnerteleport") == "On", "the rows that moved up still answer where they're drawn")
     allErrors(s)
 end
 

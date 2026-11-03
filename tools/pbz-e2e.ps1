@@ -1,8 +1,10 @@
 <#
 .SYNOPSIS
     End-to-end co-op test: two PBZ copies on this PC (host + client), checked feature by feature.
-    Starts both copies (pbz-selftest.ps1), whose PhantomPact.ini files say Host and Guest, so the mods start their relays
-    and turn co-op on by themselves, as for players. Continues both saves, then checks: players see each other, client
+    Starts both copies (pbz-selftest.ps1), whose settings.txt files say Host and Guest, so the mods start their relays
+    and turn co-op on by themselves, as for players.
+    The relay connects only through Steam Networking, and one Steam account can't reach itself: on one PC the checks
+    from 'relay connected' on fail. They need the two copies on two PCs with two Steam accounts that are friends. Continues both saves, then checks: players see each other, client
     matches host enemies, client hits land in the host world, boss fight + boss bar, host kills reach the client,
     bell rest, shared dust, shared loot. Cleans up the test dust/items and stops everything.
     Prints PASS/FAIL per check; exit code 0 only if all pass.
@@ -61,7 +63,7 @@ do { Start-Sleep 2; $boot = @(Get-ModLog -Since $t0Launch -Last 5000) } until (
      ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Phantom Pact Guest: co-op on' })) -or (Get-Date) -gt $deadline)
 $started = ($boot | Where-Object { $_ -match '\[PBZCoop\] Relay started as host' }) -and ($boot | Where-Object { $_ -match '\[PBZCoop#2\] Relay started as guest' })
 $on = ($boot | Where-Object { $_ -match 'Host: co-op on' }) -and ($boot | Where-Object { $_ -match 'Guest: co-op on' })
-Check 'mods start their relays from PhantomPact.ini' ([bool]$started) ''
+Check 'mods start their relays from settings.txt' ([bool]$started) ''
 Check 'co-op turns on by itself in gameplay' ([bool]$on) ''
 Start-Sleep 4
 $h = Run 1 'netstatus'; $c = Run 2 'netstatus'

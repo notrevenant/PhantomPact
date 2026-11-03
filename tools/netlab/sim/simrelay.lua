@@ -111,7 +111,7 @@ function Relay:status(pc)
             connected = true
         end
     end
-    local line = "role=" .. r .. " via=udp connected=" .. (connected and "yes" or "no") .. " peer=10.0.0.1:47800 rtt_ms=40 route=- rejected=0 auth=off"
+    local line = "role=" .. r .. " via=steam connected=" .. (connected and "yes" or "no") .. " peer=Friend rtt_ms=40 route=direct"
         .. " version=" .. self.version .. " partner_version=" .. self.version .. " mismatch=- partner_map=" .. tostring(self.mapOf and self.mapOf(pc) or "-") .. " time=1"
     local players, slot = self:partyOf(pc)
     if players then

@@ -51,7 +51,7 @@ Show $s
 
 Head 'the host comes back'
 $s = Get-Date
-$h = Start-DevGame -Role Host -Settings @{ ThisPcOnly = 'On'; OnlinePanel = 'On' }
+$h = Start-DevGame -Role Host
 $h | ConvertTo-Json | Set-Content "$PSScriptRoot\dev-host.json"
 $ok = Wait-DevGameplay $h 200
 "gameplay: $ok at $(Get-Date -Format HH:mm:ss), $([int]((Get-Date) - $s).TotalSeconds) s"
