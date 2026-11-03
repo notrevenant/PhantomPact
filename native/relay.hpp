@@ -1,4 +1,4 @@
-// The relay inside the game. UE4SS Lua can't open sockets, so this runs on its own thread in main.dll (main_dll.cpp),
+// The relay inside the game. UE4SS Lua can't reach Steam Networking, so this runs on its own thread in main.dll (main_dll.cpp),
 // and the mod reaches it through direct calls (lua_link.hpp) with nothing on disk between them: the game thread only
 // copies a few bytes in or out of the Mailbox here. relay_cli.cpp wraps it as a console tool for the tests.
 //
@@ -11,10 +11,7 @@
 #pragma once
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <windows.h>
-#include <bcrypt.h>
 #include <timeapi.h>
 
 #include <algorithm>
@@ -38,7 +35,6 @@
 #include <utility>
 #include <vector>
 
-#include "crypto.hpp"
 #include "lanes.hpp"
 #include "timeline.hpp"
 
@@ -54,7 +50,7 @@ constexpr double PROBE_EVERY = 1.0;
 constexpr double ACK_WAIT = 0.004;         // a bare acknowledgement goes out if no packet does within this time
 constexpr double QUICK_GAP = 0.012;        // repeats of a quick event, spaced so one burst of loss doesn't take them all
 constexpr double RETRY_MIN = 0.03, RETRY_MAX = 0.5;
-constexpr size_t MAX_PACKET = 1100;        // with a signature, still under a VPN's 1280-byte limit
+constexpr size_t MAX_PACKET = 1100;        // with Steam's own header, still one Steam datagram (steam.cpp)
 constexpr size_t MAX_TEXT = 900;           // one event or enemy line
 constexpr int MAX_PACKETS_AT_ONCE = 6;
 constexpr size_t MAX_ENEMY_LINES = 128;    // waiting to go: the oldest are out of date anyway
@@ -180,113 +176,17 @@ inline std::string strip(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-// Where a partner can be: Tailscale (100.64.0.0/10), home networks, this PC, and the Hamachi (25/8) and Radmin
-// (26/8) VPN ranges. The host takes packets only from these unless AllowAnyAddress is on.
-inline bool address_allowed(uint32_t ip) {
-    static const struct { uint32_t net, mask; } nets[] = {
-        {0x64400000, 0xFFC00000}, {0x0A000000, 0xFF000000}, {0xAC100000, 0xFFF00000}, {0xC0A80000, 0xFFFF0000},
-        {0xA9FE0000, 0xFFFF0000}, {0x7F000000, 0xFF000000}, {0x19000000, 0xFF000000}, {0x1A000000, 0xFF000000}};
-    for (const auto& n : nets)
-        if ((ip & n.mask) == n.net) return true;
-    return false;
-}
-
-// Optional shared secret (Secret = ... in PhantomPact.ini).
-// packet = MAGIC | role (1) | session (8) | counter (8) | time ms (8) | payload | HMAC-SHA256 (32)
-class Auth {
-public:
-    static constexpr char MAGIC[] = "PPA1";
-    static constexpr size_t HEADER = 4 + 1 + 8 + 8 + 8;
-    static constexpr size_t TAG = 32;
-    static constexpr double REPLAY_WINDOW_S = 120.0;
-    static constexpr size_t SESSIONS_KEPT = 8;
-    static constexpr uint64_t COUNTERS_KEPT = 64;      // the network can reorder: a late packet isn't a replay
-
-    Auth(const std::string& secret, const std::string& role) {
-        std::string master = crypto::scrypt(secret, "PhantomPact/relay/1", 1 << 14, 8, 32);
-        key_ = crypto::hmac_sha256(master, "packet-mac");
-        role_ = role == "host" ? 'H' : 'C';
-        session_.resize(8);
-        if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(session_.data()), 8,
-                                            BCRYPT_USE_SYSTEM_PREFERRED_RNG)))
-            throw std::runtime_error("no system random numbers for the Secret");
-    }
-
-    static void put_u64(std::string& out, uint64_t v) {
-        for (int i = 7; i >= 0; i--) out.push_back(static_cast<char>(v >> (8 * i)));
-    }
-    static uint64_t get_u64(const char* p) {
-        uint64_t v = 0;
-        for (int i = 0; i < 8; i++) v = (v << 8) | static_cast<unsigned char>(p[i]);
-        return v;
-    }
-
-    std::string seal(const std::string& payload) {
-        std::string body(MAGIC, 4);
-        body.push_back(role_);
-        body += session_;
-        put_u64(body, ++counter_);
-        put_u64(body, static_cast<uint64_t>(wall_seconds() * 1000));
-        body += payload;
-        return body + crypto::hmac_sha256(key_, body);
-    }
-
-    // The payload of a valid packet from the other side, or nothing.
-    std::optional<std::string> open(const std::string& data) {
-        if (data.size() < HEADER + TAG || data.compare(0, 4, MAGIC, 4) != 0) return std::nullopt;
-        std::string body = data.substr(0, data.size() - TAG);
-        std::string expected = crypto::hmac_sha256(key_, body);
-        unsigned char diff = 0;
-        for (size_t i = 0; i < TAG; i++) diff |= static_cast<unsigned char>(expected[i] ^ data[body.size() + i]);
-        if (diff) return std::nullopt;
-        std::string session = body.substr(5, 8);
-        uint64_t counter = get_u64(body.data() + 13);
-        uint64_t sent_ms = get_u64(body.data() + 21);
-        if (body[4] == role_ || session == session_) return std::nullopt;
-        if (std::fabs(wall_seconds() * 1000 - static_cast<double>(sent_ms)) > REPLAY_WINDOW_S * 1000) return std::nullopt;
-        Seen entry{session, counter, 1};
-        auto it = std::find_if(seen_.begin(), seen_.end(), [&](const Seen& s) { return s.session == session; });
-        if (it != seen_.end()) {
-            entry = *it;
-            if (counter > entry.top) {
-                const uint64_t ahead = counter - entry.top;
-                entry.bits = ahead >= COUNTERS_KEPT ? 0 : entry.bits << ahead;
-                entry.bits |= 1;
-                entry.top = counter;
-            } else {
-                const uint64_t back = entry.top - counter;
-                if (back >= COUNTERS_KEPT || (entry.bits >> back) & 1) return std::nullopt;
-                entry.bits |= 1ull << back;
-            }
-            seen_.erase(it);
-        }
-        seen_.push_back(std::move(entry));
-        while (seen_.size() > SESSIONS_KEPT) seen_.erase(seen_.begin());
-        return body.substr(HEADER);
-    }
-
-private:
-    struct Seen {
-        std::string session;
-        uint64_t top = 0, bits = 0;      // highest counter accepted; bit n set = top - n was accepted too
-    };
-
-    std::string key_, session_;
-    char role_ = 'C';
-    uint64_t counter_ = 0;
-    std::vector<Seen> seen_;             // oldest first
-};
-
-using Ini = std::map<std::string, std::string>;
+using Settings = std::map<std::string, std::string>;
 
 inline std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
-// Key (lowercase) -> value from PhantomPact.ini; ';' and '#' start comments. Empty if there's no file.
-inline Ini read_ini(const std::wstring& path) {
-    Ini out;
+// Key (lowercase) -> value, one "key=value" a line, as the mod writes net_start.txt; ';' and '#' start comments. Empty if
+// there's no file.
+inline Settings read_settings(const std::wstring& path) {
+    Settings out;
     std::string text = read_text(path);
     size_t pos = 0;
     while (pos < text.size()) {
@@ -312,13 +212,13 @@ inline std::string clean_token(const std::string& value, size_t limit = 32) {
 }
 
 inline const char* const SHARED_SETTINGS[] = {"coopenemyhealth", "coopenemyposture", "pvp", "pvpdamage",
-                                              "pvpparryposture", "connect", "revive"};
+                                              "pvpparryposture", "revive"};
 
 inline bool is_shared_setting(const std::string& key) {
     return std::any_of(std::begin(SHARED_SETTINGS), std::end(SHARED_SETTINGS), [&](const char* k) { return key == k; });
 }
 
-// An IPv4 address and port (host byte order), or a SteamID64.
+// A SteamID64 in the game. The tests' fake network (relay_cli) uses an IPv4 address and port (host byte order).
 struct Addr {
     uint32_t ip = 0;
     uint16_t port = 0;
@@ -343,114 +243,9 @@ public:
     virtual std::string describe(const Addr& a) = 0;
     virtual std::string describe_self() = 0;
     virtual const char* via() = 0;
-    std::optional<Addr> peer;     // known up front (UDP guest, Steam guest given an id)
+    std::optional<Addr> peer;     // known up front (the tests' guests; a Steam guest finds its host)
     long long filtered = 0;
     long long refused = 0;        // sends the link turned down
-};
-
-class UdpLink : public Link {
-public:
-    UdpLink(const std::string& role, const std::string& peer_host, int port, bool allow_any, bool this_pc_only)
-        : allow_any_(allow_any) {
-        WSADATA wsa;
-        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) throw std::runtime_error("Winsock didn't start");
-        sock_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (sock_ == INVALID_SOCKET) throw std::runtime_error("couldn't open a UDP socket");
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(this_pc_only ? INADDR_LOOPBACK : INADDR_ANY);
-        addr.sin_port = htons(static_cast<u_short>(role == "host" ? port : 0));
-        if (bind(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0) {
-            const int err = WSAGetLastError();
-            closesocket(sock_);
-            throw std::runtime_error("UDP port " + std::to_string(port) + (err == WSAEADDRINUSE ? " is in use on this PC" : " can't be used") +
-                                     " (error " + std::to_string(err) + "): set another Port in PhantomPact.ini on both PCs");
-        }
-        if (role != "host") {
-            // Resolved once (a Tailscale name works too): replies are matched against this exact address.
-            addrinfo hints{};
-            hints.ai_family = AF_INET;
-            hints.ai_socktype = SOCK_DGRAM;
-            addrinfo* found = nullptr;
-            if (getaddrinfo(peer_host.c_str(), nullptr, &hints, &found) != 0 || !found) {
-                closesocket(sock_);
-                throw std::runtime_error("couldn't find the host address " + peer_host);
-            }
-            Addr a;
-            a.ip = ntohl(reinterpret_cast<sockaddr_in*>(found->ai_addr)->sin_addr.s_addr);
-            a.port = static_cast<uint16_t>(port);
-            freeaddrinfo(found);
-            peer = a;
-        }
-        // Signalled the moment a packet lands, so the relay sleeps instead of polling. Makes the socket non-blocking.
-        readable_ = WSACreateEvent();
-        WSAEventSelect(sock_, readable_, FD_READ);
-    }
-
-    ~UdpLink() override {
-        WSACloseEvent(readable_);
-        closesocket(sock_);
-        WSACleanup();
-    }
-
-    void send(const Addr& to, const std::string& data) override {
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(to.ip);
-        addr.sin_port = htons(to.port);
-        sendto(sock_, data.data(), static_cast<int>(data.size()), 0, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
-    }
-
-    std::vector<std::pair<Addr, std::string>> receive() override {
-        std::vector<std::pair<Addr, std::string>> out;
-        static thread_local std::vector<char> buf(65536);
-        for (int i = 0; i < MAX_PACKETS_PER_RECEIVE; i++) {
-            sockaddr_in from{};
-            int from_len = sizeof from;
-            int n = recvfrom(sock_, buf.data(), static_cast<int>(buf.size()), 0, reinterpret_cast<sockaddr*>(&from), &from_len);
-            if (n < 0) {
-                int err = WSAGetLastError();
-                // Windows reports ICMP "port unreachable" this way while the peer isn't running yet.
-                if (err == WSAECONNRESET || err == WSAEMSGSIZE) continue;
-                break;
-            }
-            Addr a;
-            a.ip = ntohl(from.sin_addr.s_addr);
-            a.port = ntohs(from.sin_port);
-            if (peer && a != *peer) filtered++;      // a client listens to its host's exact address and port only
-            else if (!peer && !allow_any_ && !address_allowed(a.ip)) filtered++;
-            else out.emplace_back(a, std::string(buf.data(), n));
-        }
-        return out;
-    }
-
-    void wait(double seconds, HANDLE wake) override {
-        HANDLE events[2] = {wake, readable_};
-        // A socket event stays set until it's reset: left alone, this thread spins a whole core from the first packet on.
-        // Reset before the read that follows, so a packet landing after that read sets it again.
-        if (WaitForMultipleObjects(2, events, FALSE, static_cast<DWORD>(std::ceil(seconds * 1000))) == WAIT_OBJECT_0 + 1)
-            WSAResetEvent(readable_);
-    }
-
-    std::string describe(const Addr& a) override {
-        char s[32];
-        std::snprintf(s, sizeof s, "%u.%u.%u.%u:%u", a.ip >> 24, (a.ip >> 16) & 255, (a.ip >> 8) & 255, a.ip & 255, a.port);
-        return s;
-    }
-
-    std::string describe_self() override {
-        sockaddr_in me{};
-        int len = sizeof me;
-        getsockname(sock_, reinterpret_cast<sockaddr*>(&me), &len);
-        return "UDP " + std::to_string(ntohs(me.sin_port));
-    }
-
-    const char* via() override { return "udp"; }
-
-private:
-    SOCKET sock_ = INVALID_SOCKET;
-    WSAEVENT readable_ = WSA_INVALID_EVENT;
-    bool allow_any_;
 };
 
 // Between the game thread and the relay thread. Everything here is a quick copy under a lock neither side holds across
@@ -828,12 +623,11 @@ public:
 
 class Relay {
 public:
-    Relay(std::string role, const std::wstring& dir, std::unique_ptr<Link> link, const std::string* secret,
-          const Ini& ini, const std::string& version, std::function<void(const std::string&)> log, Mailbox& box = mail)
+    Relay(std::string role, const std::wstring& dir, std::unique_ptr<Link> link, const Settings& settings,
+          const std::string& version, std::function<void(const std::string&)> log, Mailbox& box = mail)
         : role_(std::move(role)), link_(std::move(link)), log_(std::move(log)), box_(box), version_(clean_token(version)) {
         status_path = dir + L"\\net_status.txt";
-        if (secret) auth_ = std::make_unique<Auth>(*secret, role_);
-        for (const auto& [key, value] : ini)
+        for (const auto& [key, value] : settings)
             if (is_shared_setting(key)) settings_[key] = lower(clean_token(value));
         peer_ = link_->peer;
         new_session();
@@ -846,25 +640,10 @@ public:
 
     void wait() { link_->wait(TICK, box_.wake); }
 
-    // One packet as it came off the wire, signature and all.
-    void on_packet(const Addr& from, const std::string& packet, double now) {
-        // Checked before anything else (before a host takes a sender as its partner): with a secret only validly signed
-        // packets count; without one, signed packets mean the partner set a secret we don't have.
-        if (auth_) {
-            auto opened = auth_->open(packet);
-            if (!opened) {
-                rejected_++;
-                return;
-            }
-            handle(from, *opened, now);
-        } else if (packet.compare(0, 4, Auth::MAGIC, 4) == 0) {
-            rejected_++;
-        } else {
-            handle(from, packet, now);
-        }
-    }
+    // One packet as it came off the wire. Steam has already told who sent it, and only friends get a session.
+    void on_packet(const Addr& from, const std::string& packet, double now) { handle(from, packet, now); }
 
-    // Past the signature. Public for the test that sets a packet against unreadable memory, to catch any over-read.
+    // Public for the test that sets a packet against unreadable memory, to catch any over-read.
     void handle(const Addr& addr, std::string_view data, double now) {
         // A stranger's old-version packet says nothing about the partner.
         const bool stranger = peer_ && *peer_ != addr && now - last_heard_ <= PEER_TIMEOUT;
@@ -994,8 +773,7 @@ public:
         }
     }
 
-    // rejected_elsewhere: a party's other relays', which share this socket.
-    std::string status(double now, long long rejected_elsewhere = 0) {
+    std::string status(double now) {
         bool connected = peer_ && now - last_heard_ <= PEER_TIMEOUT;
         std::string peer = "-";
         if (peer_) {
@@ -1022,8 +800,7 @@ public:
                " rtt_ms=" + rtt + " route=" + route.kind +
                " route_ping_ms=" + (route.ping_ms < 0 ? "-" : std::to_string(route.ping_ms)) +
                " sent=" + std::to_string(sent_) + " received=" + std::to_string(received_) +
-               " filtered=" + std::to_string(link_->filtered) + " rejected=" + std::to_string(rejected_ + rejected_elsewhere) +
-               " auth=" + (auth_ ? "on" : "off") + " version=" + version_ +
+               " filtered=" + std::to_string(link_->filtered) + " version=" + version_ +
                " partner_version=" + (partner_version_.empty() ? "-" : partner_version_) +
                " partner_map=" + (partner_map_.empty() ? "-" : partner_map_) +
                " mismatch=" + (mismatch.empty() ? "-" : mismatch) + " events_acked=" + std::to_string(sure_out_.acked) +
@@ -1054,7 +831,6 @@ public:
     bool partner_is(const Addr& a) const { return peer_ && *peer_ == a; }
     bool here(double now) const { return peer_ && now - last_heard_ <= PEER_TIMEOUT; }
     bool heard_of_someone() const { return !partner_version_.empty(); }
-    long long rejected() const { return rejected_; }
     const std::string& partner_version() const { return partner_version_; }
     const std::string& partner_map() const { return partner_map_; }
     const std::vector<std::string>& mismatch() const { return mismatch_; }
@@ -1093,7 +869,7 @@ private:
     void send_packet(const std::string& p, double now, const Addr* to = nullptr) {
         const Addr* target = to ? to : (peer_ ? &*peer_ : nullptr);
         if (!target) return;
-        link_->send(*target, auth_ ? auth_->seal(p) : p);
+        link_->send(*target, p);
         sent_++;
         sequence_++;
         last_send_ = now;
@@ -1274,7 +1050,6 @@ private:
     std::unique_ptr<Link> link_;
     std::function<void(const std::string&)> log_;
     Mailbox& box_;
-    std::unique_ptr<Auth> auth_;
     std::map<std::string, std::string> settings_;
     std::string version_, partner_version_, partner_map_, map_name_;
     std::vector<std::string> mismatch_;
@@ -1292,7 +1067,7 @@ private:
     double echo_arrived_ms_ = 0, rtt_ms_ = -1;
     size_t header_bytes_ = 0;
     double last_send_ = 0, last_heard_ = 0, last_hello_ = 0, last_probe_ = -1e9, ack_wanted_at_ = -1;
-    long long rejected_ = 0, received_ = 0, sent_ = 0, lost_ = 0, received_mark_ = 0, lost_mark_ = 0;
+    long long received_ = 0, sent_ = 0, lost_ = 0, received_mark_ = 0, lost_mark_ = 0;
     // A party. As a host's relay for one guest:
     static constexpr size_t SAMPLE_BYTES = 40;
     Hub* hub_ = nullptr;
@@ -1314,17 +1089,15 @@ namespace relay {
 struct Options {
     std::string role;              // "host" or "client"
     std::wstring dir;              // the mod's files
-    std::string peer;              // client: the host's address; Steam: a name or id, or nothing
-    std::string transport = "udp";
-    bool allow_any = false;
-    bool this_pc_only = false;     // tests: two copies on one PC, nothing for Windows' firewall to ask about
-    std::wstring ini;
+    Settings settings;             // what the mod's start file says: fourplayers, steamdirect and the shared settings
     std::string version = "?";
-    int port = 47800;
     double seconds = 0;            // 0 = for the life of the game
+    // Where the packets go. Unset in the game: Steam Networking. relay_cli's bench sets its own (tests only).
+    std::function<std::unique_ptr<Link>(const Options&)> make_link;
 };
 
-std::unique_ptr<Link> make_steam_link(const std::string& role, const std::string& peer);
+// direct: SteamDirect from the panel, which lets Steam try a direct route (the partner can then see this PC's IP).
+std::unique_ptr<Link> make_steam_link(const std::string& role, bool direct);
 
 // Runs until the player leaves (Mailbox::ask_stop), at most for the life of the game: it lives in the game's own process,
 // so it can't outlive it. A failure leaves relay_error.txt next to the status, since nobody watches a console inside the game.
@@ -1334,24 +1107,11 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);   // every core may be busy with the game
     std::string failure;
     try {
-        Ini ini = o.ini.empty() ? Ini{} : read_ini(o.ini);
-        auto any = ini.find("allowanyaddress");
-        if (any != ini.end()) {
-            std::string v = lower(any->second);
-            // A virtual LAN with unusual addresses (UU Accelerator's multiplayer, ZeroTier...): the player opened it.
-            if (v == "on" || v == "yes" || v == "true" || v == "1") o.allow_any = true;
-        }
-        if (lower(ini["thispconly"]) == "on") o.this_pc_only = true;
-        std::string secret;
-        if (auto it = ini.find("secret"); it != ini.end()) secret = it->second;
-        std::string secret_lower = lower(secret);
-        bool signed_packets = !(secret_lower.rfind("put-", 0) == 0 || secret_lower.empty() || secret_lower == "off" ||
-                                secret_lower == "none");
-        std::unique_ptr<Link> link;
-        if (o.transport == "steam") link = make_steam_link(o.role, o.peer);
-        else link = std::make_unique<UdpLink>(o.role, o.peer, o.port, o.allow_any, o.this_pc_only);
+        Settings& settings = o.settings;
+        std::unique_ptr<Link> link = o.make_link ? o.make_link(o)
+                                                 : make_steam_link(o.role, lower(settings["steamdirect"]) == "on");
         const auto serve = [&](auto& relay) {
-            log("PBZCoop relay " + o.role + " on " + relay.describe_self() + (signed_packets ? ", packets signed (Secret set)" : ""));
+            log("PBZCoop relay " + o.role + " on " + relay.describe_self());
             const double start = monotonic();
             double last_status = 0;
             while (!mail.stop) {
@@ -1368,12 +1128,12 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
                 relay.wait();
             }
         };
-        // The host's setting decides: a guest follows what the host's hello says, whatever its own ini has.
-        if (o.role == "host" && lower(ini["fourplayers"]) == "on") {
-            Party party(o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
+        // The host's setting decides: a guest follows what the host's hello says, whatever its own panel has.
+        if (o.role == "host" && lower(settings["fourplayers"]) == "on") {
+            Party party(o.dir, std::move(link), settings, o.version, log);
             serve(party);
         } else {
-            Relay relay(o.role, o.dir, std::move(link), signed_packets ? &secret : nullptr, ini, o.version, log);
+            Relay relay(o.role, o.dir, std::move(link), settings, o.version, log);
             serve(relay);
         }
     } catch (const std::exception& e) {
@@ -1386,7 +1146,7 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
     const std::string stopped = "role=" + o.role + " connected=no stopped=yes" + (failure.empty() ? "" : " error=" + failure);
     write_atomic(status_path, stopped + "\n");
     if (o.seconds > 0) return;     // a timed run (the tests): its caller still reads the last status
-    // The socket is closed (relay and link ended with the try) and this thread goes back to waiting for a start file:
+    // The Steam sessions are closed (relay and link ended with the try) and this thread goes back to waiting for a start file:
     // nothing of this run may reach the next one, which can be another role.
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
     mail.reset();

@@ -3,7 +3,8 @@
 // need a callback, and they arrive on whatever thread the game runs Steam callbacks on, so they're queued for the
 // relay thread.
 //
-// Everything sent is unreliable and leaves at once: the lanes in lanes.hpp do what reliability is needed, as on UDP.
+// This is the only way the relay reaches a partner. Everything sent is unreliable and leaves at once: the lanes in
+// lanes.hpp do what reliability is needed.
 // Calls the link can live without are looked up with find_optional: a Steam that lacks them still links, only slower.
 #include "relay.hpp"
 
@@ -36,8 +37,8 @@ constexpr double FRIENDS_REFRESH = 5.0;
 constexpr int STEAM_WAIT_S = 20;
 
 // Up to 1200 bytes go in one datagram (MTU_DataSize), Steam's own header of 5 included. A longer unreliable message is
-// split, and one lost piece loses all of it; past 16500 bytes Steam makes it reliable. A signed packet never gets there.
-static_assert(relay::MAX_PACKET + relay::Auth::HEADER + relay::Auth::TAG + 5 <= 1200);
+// split, and one lost piece loses all of it; past 16500 bytes Steam makes it reliable. A packet never gets there.
+static_assert(relay::MAX_PACKET + 5 <= 1200);
 
 // SteamNetworkingIdentity: a type tag, a size and a 128-byte union (the SteamID64 sits at its start).
 struct Identity {
@@ -139,49 +140,29 @@ F find_optional(HMODULE dll, const char* name) {
     return reinterpret_cast<F>(GetProcAddress(dll, name));
 }
 
-// SteamDirect in PhantomPact.ini, off unless it says on: it shows this PC's IP to the partner, so that stays the player's
-// choice, and a Steam setting of Never mustn't be overruled by default. run() reads the file but doesn't pass it this far,
-// so it's found
-// the way main_dll.cpp finds it: this DLL is in <mod>\dlls, and copy N of the game on one PC uses <mod>\instN.
-bool direct_wanted() {
-    HMODULE self = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&direct_wanted), &self))
-        return false;
-    wchar_t path[MAX_PATH * 4];
-    std::wstring dir(path, GetModuleFileNameW(self, path, static_cast<DWORD>(std::size(path))));
-    for (int up = 0; up < 2; up++) dir = dir.substr(0, dir.find_last_of(L'\\'));
-    wchar_t instance[16];
-    if (GetEnvironmentVariableW(L"PBZCOOP_INSTANCE", instance, 16) > 0 && _wtoi(instance) > 1)
-        dir += L"\\inst" + std::wstring(instance);
-    relay::Ini ini = relay::read_ini(dir + L"\\PhantomPact.ini");
-    return relay::lower(ini["steamdirect"]) == "on";
-}
-
 // Settings for all Steam networking in this process, which is only this link. Steam may refuse any of them: each is a
 // preference, and the link works without it. They reach sessions opened after this, and it runs before there are any.
-void tune(HMODULE dll, void* utils) {
+void tune(HMODULE dll, void* utils, bool direct) {
     auto set = find_optional<bool (*)(void*, int, int32_t)>(dll,
                                                             "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32");
     if (!set) return;
     // Steam paces each session at a fixed 256 KB/s, with one packet of burst, so of six full packets sent at once the last
-    // left 23 ms after the first. A UDP socket has no such wait. Traffic is far below either rate: this only shortens
-    // bursts. Minimum and maximum equal: that's how Steam's header says to set a rate.
+    // left 23 ms after the first, for no gain. Traffic is far below either rate: this only shortens bursts. Minimum and
+    // maximum equal: that's how Steam's header says to set a rate.
     set(utils, CONFIG_SEND_RATE_MIN, SEND_RATE);
     set(utils, CONFIG_SEND_RATE_MAX, SEND_RATE);
     // Left alone, Steam Networking's player setting decides, and on its usual Default that means Valve's relays unless
-    // the ping looks excessive: the extra delay players see next to Tailscale. Asking for direct here passes over that
-    // setting, so a partner can see this PC's IP: only with SteamDirect = On. Only friends get a session.
+    // the ping looks excessive, which adds delay. Asking for direct here passes over that setting, so a partner can see
+    // this PC's IP: only with Steam Direct on in the panel (MORE). Only friends get a session.
     // A direct route pays 10 ms and 10% in Steam's scoring, and takes over from a working route only if 10% better. With
     // this penalty a tie goes direct when the route is picked, and a direct route 10% quicker replaces the relay later.
-    const bool direct = direct_wanted();
     set(utils, CONFIG_ICE_ENABLE, direct ? ICE_PRIVATE | ICE_PUBLIC : ICE_STEAM_DECIDES);
     set(utils, CONFIG_RELAY_PENALTY, direct ? RELAY_PENALTY_MS : 0);
 }
 
 class SteamLink : public relay::Link {
 public:
-    SteamLink(const std::string& role, const std::string& peer_text) {
+    SteamLink(bool direct) {
         HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
         if (!dll) throw std::runtime_error("Steam isn't loaded in this game (steam_api64.dll)");
         auto get_friends = find_fn<void* (*)()>(dll, "SteamAPI_SteamFriends_v018");
@@ -212,24 +193,13 @@ public:
 
         void* utils = get_utils();
         if (utils) {
-            tune(dll, utils);
+            tune(dll, utils, direct);
             find_fn<void (*)(void*)>(dll, "SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess")(utils);
         }
         if (!callback_registered) {
             find_fn<void (*)(CCallbackBase*, int)>(dll, "SteamAPI_RegisterCallback")(&session_request_callback,
                                                                                      CALLBACK_SESSION_REQUEST);
             callback_registered = true;
-        }
-        if (role != "host" && !peer_text.empty()) {
-            bool is_id = peer_text.size() == 17 &&
-                         std::all_of(peer_text.begin(), peer_text.end(), [](char c) { return c >= '0' && c <= '9'; });
-            if (is_id) {
-                relay::Addr a;
-                a.steam = std::strtoull(peer_text.c_str(), nullptr, 10);
-                peer = a;
-            } else {
-                wanted_ = relay::lower(relay::strip(peer_text));    // a friend name, case-insensitive
-            }
         }
     }
 
@@ -312,7 +282,6 @@ public:
                 uint64_t id = friend_by_index_(friends_, i, FRIEND_FLAG_IMMEDIATE);
                 FriendGameInfo info{};
                 if (!friend_game_(friends_, id, &info) || (info.game_id & 0xFFFFFF) != APP_ID) continue;
-                if (!wanted_.empty() && relay::lower(relay::strip(name_of(id))) != wanted_) continue;
                 relay::Addr a;
                 a.steam = id;
                 playing_.push_back(a);
@@ -401,7 +370,6 @@ private:
     int (*session_info_)(void*, const Identity*, SessionInfo*, SessionStatus*) = nullptr;
     bool (*close_)(void*, const Identity*) = nullptr;
     std::string problem_;
-    std::string wanted_;
     std::vector<relay::Addr> playing_;
     std::map<uint64_t, double> sessions_;    // everyone this run talked to, and the last send while their session wasn't up
     double friends_at_ = -1e9, heard_at_ = -1e9, swept_at_ = -1e9;
@@ -409,6 +377,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string& role, const std::string& peer) {
-    return std::make_unique<SteamLink>(role, peer);
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool direct) {
+    return std::make_unique<SteamLink>(direct);
 }

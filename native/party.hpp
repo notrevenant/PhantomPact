@@ -14,7 +14,7 @@
 
 namespace relay {
 
-// The host's socket as one guest's Relay sees it. Party reads it for all of them, so there's nothing for a Relay to receive.
+// The host's Steam link as one guest's Relay sees it. Party reads it for all of them, so there's nothing for a Relay to receive.
 class GuestLink : public Link {
 public:
     explicit GuestLink(Link& shared) : shared_(shared) {}
@@ -43,7 +43,7 @@ private:
 
 class Party : public Hub {
 public:
-    Party(const std::wstring& dir, std::unique_ptr<Link> link, const std::string* secret, const Ini& ini, const std::string& version,
+    Party(const std::wstring& dir, std::unique_ptr<Link> link, const Settings& settings, const std::string& version,
           std::function<void(const std::string&)> log, Mailbox& box = mail)
         : link_(std::move(link)), box_(box), version_(clean_token(version)) {
         for (int slot = FIRST_GUEST_SLOT; slot <= MAX_SLOT; slot++) {
@@ -51,7 +51,7 @@ public:
             guest->slot = slot;
             auto sub = std::make_unique<GuestLink>(*link_);
             guest->link = sub.get();
-            guest->relay = std::make_unique<Relay>("host", dir, std::move(sub), secret, ini, version, log, guest->box);
+            guest->relay = std::make_unique<Relay>("host", dir, std::move(sub), settings, version, log, guest->box);
             guest->relay->join_party(this, slot, MAX_SLOT);
             guests_.push_back(std::move(guest));
         }
@@ -82,13 +82,12 @@ public:
         std::string line, versions, maps;
         std::vector<std::string> differ;
         int rank = -1, here = 0;
-        long long rejected = 0, sent = 0;
-        for (auto& guest : guests_) rejected += guest->relay->rejected();
+        long long sent = 0;
         for (auto& guest : guests_) {
             guest->link->copy_counts();
             sent += guest->link->sent_bytes;
             // Asked of each: it counts its losses from one call to the next.
-            std::string one = guest->relay->status(now, rejected - guest->relay->rejected());
+            std::string one = guest->relay->status(now);
             const bool in = guest->relay->here(now);
             const int mine = in ? 2 : guest->relay->heard_of_someone() ? 1 : 0;
             here += in ? 1 : 0;

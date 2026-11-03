@@ -4,7 +4,7 @@
 //                                       60 frames a second and measures what arrives. Two bots on one PC share a clock,
 //                                       so every delay it prints is the true one.
 //   relay_cli netem <listen port> <target port> [options]   a bad connection between two ports on this PC
-#include "relay.hpp"
+#include "loopback_link.hpp"
 
 #include <limits>
 #include <queue>
@@ -493,7 +493,7 @@ public:
     std::vector<std::pair<relay::Addr, std::string>> receive() override {
         std::vector<std::pair<relay::Addr, std::string>> out;
         for (auto& [from, data] : net_.take(me_.ip)) {
-            if (peer && from != *peer) filtered++;     // what UdpLink does
+            if (peer && from != *peer) filtered++;     // what LoopbackLink does
             else out.emplace_back(from, std::move(data));
         }
         return out;
@@ -512,10 +512,10 @@ private:
 
 // One player: their relay, and what their game has read from it.
 struct End {
-    End(FakeNet& net, const char* role, uint32_t ip, std::optional<relay::Addr> host = std::nullopt, const relay::Ini& ini = {},
-        const std::string* secret = nullptr, std::vector<relay::Addr> friends = {})
+    End(FakeNet& net, const char* role, uint32_t ip, std::optional<relay::Addr> host = std::nullopt, const relay::Settings& settings = {},
+        std::vector<relay::Addr> friends = {})
         : addr(at(ip)), net_(net) {
-        relay = std::make_unique<relay::Relay>(role, L".", std::make_unique<FakeLink>(net, addr, host, std::move(friends)), secret, ini,
+        relay = std::make_unique<relay::Relay>(role, L".", std::make_unique<FakeLink>(net, addr, host, std::move(friends)), settings,
                                                "1.5.0", [](const std::string&) {}, box);
     }
 
@@ -597,15 +597,8 @@ std::string raw_packet(const RawHeader& h, const std::string& rest = "") {
     return p + rest;
 }
 
-constexpr uint32_t ip4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return (a << 24) | (b << 16) | (c << 8) | d; }
-
 void test_partners() {
     std::puts("who talks to whom:");
-    for (uint32_t ip : {ip4(100, 101, 102, 103), ip4(192, 168, 1, 20), ip4(10, 0, 0, 5), ip4(172, 20, 1, 1), ip4(127, 0, 0, 1), ip4(25, 1, 2, 3), ip4(26, 9, 9, 9), ip4(169, 254, 1, 1)})
-        check(relay::address_allowed(ip), "a partner's range is let in: " + std::to_string(ip >> 24) + ".x");
-    for (uint32_t ip : {ip4(8, 8, 8, 8), ip4(203, 0, 113, 7), ip4(100, 63, 0, 1), ip4(172, 32, 0, 1), ip4(1, 1, 1, 1)})
-        check(!relay::address_allowed(ip), "the open internet isn't: " + std::to_string(ip >> 24) + "." + std::to_string((ip >> 16) & 255) + ".x");
-
     FakeNet net;
     End host(net, "host", 1), first(net, "client", 2, at(1));
     run(net, {&host, &first}, 0.3);
@@ -630,7 +623,7 @@ void test_partners() {
 
     // A Steam guest looks through its friends in the game: only a host answers, and another guest is never taken for one.
     FakeNet steam;
-    End friend_host(steam, "host", 11), friend_guest(steam, "client", 13), seeker(steam, "client", 12, std::nullopt, {}, nullptr, {at(13), at(11)});
+    End friend_host(steam, "host", 11), friend_guest(steam, "client", 13), seeker(steam, "client", 12, std::nullopt, {}, {at(13), at(11)});
     run(steam, {&friend_host, &friend_guest, &seeker}, 1.5);
     check(seeker.field("peer") == "pc11" && friend_host.field("peer") == "pc12", "a guest pins the friend who is hosting");
     check(friend_guest.field("peer") == "-", "a guest never answers a guest");
@@ -644,67 +637,11 @@ void test_partners() {
     check(guest.field("filtered") == "1" && guest.field("connected") == "no", "a guest takes nothing from a stranger's address");
 }
 
-void test_secret() {
-    std::puts("secret:");
-    const std::string secret = "correct horse battery", other = "something else";
-    relay::Auth sealer(secret, "host"), opener(secret, "client");
-    const std::string p = sealer.seal("hello");
-    const auto opened = opener.open(p);
-    check(opened && *opened == "hello", "a signed packet opens");
-    check(!opener.open(p), "a replayed packet is refused");
-    const std::string first = sealer.seal("a"), second = sealer.seal("b");
-    check(opener.open(second) && opener.open(first), "a signed packet that arrives late isn't a replay");
-    check(!opener.open(first) && !opener.open(second), "but counts once");
-    std::string tampered = sealer.seal("hello");
-    tampered[30] ^= 1;
-    check(!opener.open(tampered), "a tampered packet is refused");
-    check(!sealer.open(sealer.seal("x")), "a packet bounced back at its sender is refused");
-    relay::Auth second_host(secret, "host");
-    check(!sealer.open(second_host.seal("x")), "a packet from the same role is refused");
-    relay::Auth wrong(other, "client");
-    check(!wrong.open(sealer.seal("x")), "the wrong secret opens nothing");
-    check(!opener.open("{\"t\":\"state\"}"), "an unsigned packet is refused when a secret is set");
-    const std::string key = crypto::hmac_sha256(crypto::scrypt(secret, "PhantomPact/relay/1", 1 << 14, 8, 32), "packet-mac");
-    std::string body(relay::Auth::MAGIC, 4);
-    body.push_back('H');
-    body += "12345678";
-    relay::Auth::put_u64(body, 1);
-    relay::Auth::put_u64(body, static_cast<uint64_t>((relay::wall_seconds() - relay::Auth::REPLAY_WINDOW_S - 5) * 1000));
-    body += "x";
-    check(!opener.open(body + crypto::hmac_sha256(key, body)), "a signed packet from minutes ago is refused");
-    const std::string whole = sealer.seal("cut me");
-    bool any = false;
-    for (size_t n = 0; n < whole.size(); n++) any = any || opener.open(whole.substr(0, n)).has_value();
-    check(!any, "a signed packet cut at any byte is refused");
-
-    FakeNet same;
-    End host(same, "host", 1, std::nullopt, {}, &secret), guest(same, "client", 2, at(1), {}, &secret);
-    run(same, {&host, &guest}, 0.3);
-    host.box.post_sure("signed");
-    run(same, {&host, &guest}, 0.3);
-    check(guest.field("connected") == "yes" && guest.count("signed") == 1 && guest.field("auth") == "on", "the same secret connects");
-
-    FakeNet differ;
-    End host2(differ, "host", 1, std::nullopt, {}, &secret), guest2(differ, "client", 2, at(1), {}, &other);
-    run(differ, {&host2, &guest2}, 1.0);
-    check(host2.field("peer") == "-" && host2.field("rejected") != "0", "different secrets never connect, and the host counts them");
-
-    FakeNet one;
-    End host3(one, "host", 1, std::nullopt, {}, &secret), guest3(one, "client", 2, at(1));
-    run(one, {&host3, &guest3}, 1.0);
-    check(host3.field("peer") == "-" && host3.field("rejected") != "0", "a secret on the host alone doesn't connect");
-
-    FakeNet two;
-    End host4(two, "host", 1), guest4(two, "client", 2, at(1), {}, &secret);
-    run(two, {&host4, &guest4}, 1.0);
-    check(host4.field("peer") == "-" && host4.field("rejected") != "0", "nor on the guest alone");
-}
-
 void test_hello() {
     std::puts("hello:");
     FakeNet net;
-    const relay::Ini mine{{"pvp", "On"}, {"coopenemyhealth", "150"}, {"revive", "2 min"}, {"role", "host"}};
-    const relay::Ini theirs{{"pvp", "Off"}, {"coopenemyhealth", "150"}, {"revive", "2 min"}, {"role", "guest"}};
+    const relay::Settings mine{{"pvp", "On"}, {"coopenemyhealth", "150"}, {"revive", "2 min"}, {"role", "host"}};
+    const relay::Settings theirs{{"pvp", "Off"}, {"coopenemyhealth", "150"}, {"revive", "2 min"}, {"role", "guest"}};
     End host(net, "host", 1, std::nullopt, mine), guest(net, "client", 2, at(1), theirs);
     host.box.post_map("Map_Village");
     run(net, {&host, &guest}, 0.3);
@@ -1253,17 +1190,6 @@ void test_hostile() {
     run(net, {&host, &guest}, 1);
     check(guest.count("alive") == 1 && host.count("alive too") == 1, "and the real partner still gets through");
 
-    const std::string secret = "correct horse battery";
-    FakeNet signed_net;
-    End strict(signed_net, "host", 1, std::nullopt, {}, &secret);
-    for (int i = 0; i < 100000; i++) {
-        std::string p(relay::Auth::HEADER + relay::Auth::TAG + rng() % 256, '\0');
-        for (char& c : p) c = byte();
-        if (i % 2) p.replace(0, 4, relay::Auth::MAGIC, 4);
-        strict.relay->on_packet(at(2), p, signed_net.now);
-    }
-    check(strict.field("rejected") == "100000" && strict.field("peer") == "-", "with a secret, none of 100000 forgeries even gets looked at");
-
     // Sample values a real game never sends must stop at the door.
     FakeNet net2;
     End taker(net2, "host", 1);
@@ -1292,8 +1218,8 @@ void test_hostile() {
 
 // A host with FourPlayers = On, in the same simulated network as End.
 struct Hosting {
-    Hosting(FakeNet& net, uint32_t ip, const std::string* secret = nullptr)
-        : addr(at(ip)), net_(net), party(L".", std::make_unique<FakeLink>(net, addr, std::nullopt, std::vector<relay::Addr>{}), secret, {}, "1.5.0",
+    Hosting(FakeNet& net, uint32_t ip)
+        : addr(at(ip)), net_(net), party(L".", std::make_unique<FakeLink>(net, addr, std::nullopt, std::vector<relay::Addr>{}), {}, "1.5.0",
                                          [](const std::string&) {}, box) {}
 
     void step() {
@@ -1446,7 +1372,7 @@ void test_party() {
         // Each guest counts, not only the one who speaks for the connection.
         FakeNet net;
         Hosting host(net, 1);
-        const relay::Ini same{{"pvp", "off"}}, differs{{"pvp", "on"}, {"coopenemyhealth", "300"}};
+        const relay::Settings same{{"pvp", "off"}}, differs{{"pvp", "on"}, {"coopenemyhealth", "300"}};
         End a(net, "client", 2, at(1), same), b(net, "client", 3, at(1), differs);
         a.box.post_map("Map_A");
         b.box.post_map("Map_B");
@@ -1461,12 +1387,12 @@ void test_party() {
         check(host.field("upload_kb_s").find_first_not_of("0123456789") == std::string::npos, "and what it sends a second");
         FakeNet other;
         Hosting mixed(other, 1);
-        const relay::Ini host_ini{{"pvp", "off"}};
+        const relay::Settings host_ini{{"pvp", "off"}};
         End first(other, "client", 2, at(1));
         relay::Mailbox box;
         // A guest on another version of the mod, whichever slot it lands in.
         auto oddLink = std::make_unique<FakeLink>(other, at(3), at(1), std::vector<relay::Addr>{});
-        relay::Relay odd("client", L".", std::move(oddLink), nullptr, {}, "1.4.1b", [](const std::string&) {}, box);
+        relay::Relay odd("client", L".", std::move(oddLink), {}, "1.4.1b", [](const std::string&) {}, box);
         for (int i = 0; i < 100; i++) {
             other.now += 0.005;
             mixed.step();
@@ -1479,7 +1405,7 @@ void test_party() {
         // A setting that differs on one guest shows on the host, whoever speaks for the connection.
         FakeNet net;
         relay::Mailbox box;
-        relay::Party party(L".", std::make_unique<FakeLink>(net, at(1), std::nullopt, std::vector<relay::Addr>{}), nullptr, {{"pvp", "off"}}, "1.5.0", [](const std::string&) {}, box);
+        relay::Party party(L".", std::make_unique<FakeLink>(net, at(1), std::nullopt, std::vector<relay::Addr>{}), {{"pvp", "off"}}, "1.5.0", [](const std::string&) {}, box);
         End a(net, "client", 2, at(1), {{"pvp", "off"}}), b(net, "client", 3, at(1), {{"pvp", "on"}});
         for (int i = 0; i < 100; i++) {
             net.now += 0.005;
@@ -1590,14 +1516,6 @@ void test_party() {
         empty.party.on_packet(at(9), raw_packet(forged, rest), other.now);
         relay::Sample out;
         check(empty.field("peer") == "pc9" && !sees(empty.box, 3, out), "a host takes no other player's position from a guest");
-
-        const std::string secret = "correct horse battery", wrong = "something else";
-        FakeNet signed_net;
-        Hosting strict(signed_net, 1, &secret);
-        End good(signed_net, "client", 2, at(1), {}, &secret), bad(signed_net, "client", 3, at(1), {}, &wrong);
-        run(signed_net, strict, {&good, &bad}, 1.0);
-        check(strict.field("guests") == "1" && good.field("connected") == "yes" && good.field("slot") == "2", "with a Secret the right guest gets in");
-        check(bad.field("connected") == "no" && strict.field("rejected") != "0", "and the wrong one takes no slot");
     }
     {
         FakeNet net;
@@ -1689,8 +1607,8 @@ void test_party() {
 void sure_over_sockets(int port, double loss_pct, int total, size_t bytes) {
     relay::Mailbox host_box, guest_box;
     const auto quiet = [](const std::string&) {};
-    relay::Relay host("host", L".", std::make_unique<relay::UdpLink>("host", "", port, false, true), nullptr, {}, "test", quiet, host_box);
-    relay::Relay guest("client", L".", std::make_unique<relay::UdpLink>("client", "127.0.0.1", port + 1, false, true), nullptr, {}, "test", quiet, guest_box);
+    relay::Relay host("host", L".", std::make_unique<relay::LoopbackLink>("host", port), relay::Settings{}, "test", quiet, host_box);
+    relay::Relay guest("client", L".", std::make_unique<relay::LoopbackLink>("client", port + 1), relay::Settings{}, "test", quiet, guest_box);
     Netem bad;
     bad.listen = port + 1;
     bad.target = port;
@@ -1746,7 +1664,7 @@ void test_sockets(int port) {
     // A stranger writing to a guest's port is stopped by the socket layer's address check.
     const auto quiet = [](const std::string&) {};
     relay::Mailbox box;
-    relay::Relay guest("client", L".", std::make_unique<relay::UdpLink>("client", "127.0.0.1", port + 6, false, true), nullptr, {}, "test", quiet, box);
+    relay::Relay guest("client", L".", std::make_unique<relay::LoopbackLink>("client", port + 6), relay::Settings{}, "test", quiet, box);
     const std::string self = guest.describe_self();
     const int guest_port = std::atoi(self.c_str() + 4);
     SOCKET stranger = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -1771,7 +1689,6 @@ int run_tests(int argc, wchar_t** argv) {
     test_lanes();
     test_packets();
     test_partners();
-    test_secret();
     test_hello();
     test_wire();
     test_sessions();
@@ -1794,12 +1711,15 @@ int run_tests(int argc, wchar_t** argv) {
 int run_bot(int argc, wchar_t** argv) {
     relay::Options o;
     o.role = relay::narrow(argv[2]);
-    o.peer = relay::narrow(opt_text(argc, argv, L"--peer", L"127.0.0.1"));
-    o.port = static_cast<int>(opt_number(argc, argv, L"--port", 47810));
+    const int port = static_cast<int>(opt_number(argc, argv, L"--port", 47810));
     o.dir = opt_text(argc, argv, L"--dir", L".");
-    o.ini = opt_text(argc, argv, L"--ini", L"");
+    // What the mod's start file would carry (fourplayers=on, pvp=on...): key=value lines.
+    const std::wstring settings = opt_text(argc, argv, L"--settings", L"");
+    if (!settings.empty()) o.settings = relay::read_settings(settings);
+    o.make_link = [port](const relay::Options& options) -> std::unique_ptr<relay::Link> {
+        return std::make_unique<relay::LoopbackLink>(options.role, port);
+    };
     o.version = "bot";
-    o.this_pc_only = true;
     const double seconds = opt_number(argc, argv, L"--seconds", 20);
     const double fps = opt_number(argc, argv, L"--fps", 60);
     const int enemies = static_cast<int>(opt_number(argc, argv, L"--enemies", 0));
@@ -2063,8 +1983,8 @@ int wmain(int argc, wchar_t** argv) {
     if (mode == L"test") return run_tests(argc, argv);
     if (mode == L"bot" && argc > 2) return run_bot(argc, argv);
     if (mode == L"netem" && argc > 3) return run_netem(argc, argv);
-    std::fputs("usage: relay_cli test [--sockets 0] [--port n] | bot host|client [--port n] [--peer ip] [--seconds s] [--fps n] [--enemies n]"
-               " [--hitch-every s --hitch-ms ms] [--cx x --cy y --cz z] [--dir folder] [--ini file]"
+    std::fputs("usage: relay_cli test [--sockets 0] [--port n] | bot host|client [--port n] [--seconds s] [--fps n] [--enemies n]"
+               " [--hitch-every s --hitch-ms ms] [--cx x --cy y --cz z] [--dir folder] [--settings file]"
                " [--event-every s] [--event-bytes n] [--events-for s] [--burst n]"
                " | netem <listen port> <target port>"
                " [--delay ms] [--jitter ms] [--loss %] [--duplicate %] [--stall-every s --stall-ms ms] [--seconds s]\n", stderr);
@@ -2072,6 +1992,6 @@ int wmain(int argc, wchar_t** argv) {
 }
 
 // The console tool has no game around it, so no Steam.
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, const std::string&) {
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool) {
     throw std::runtime_error("relay_cli has no Steam: the Steam link only works inside the game");
 }

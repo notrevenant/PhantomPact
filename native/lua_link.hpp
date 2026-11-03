@@ -228,28 +228,6 @@ extern "C" __declspec(dllexport) int pp_status(void* lua) {
     return a ? push_text(a, State{lua}, relay::mail.status()) : 0;
 }
 
-// The text on the Windows clipboard, for the online panel's Paste button. Only ever read when that button is pressed.
-extern "C" __declspec(dllexport) int pp_paste(void* lua) {
-    using namespace lua_link;
-    const Api* a = api();
-    if (!a) return 0;
-    std::string text;
-    if (OpenClipboard(nullptr)) {
-        if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
-            if (const auto* w = static_cast<const wchar_t*>(GlobalLock(h))) {
-                const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-                if (n > 1 && n <= 512) {
-                    text.resize(n - 1);
-                    WideCharToMultiByte(CP_UTF8, 0, w, -1, text.data(), n, nullptr, nullptr);
-                }
-                GlobalUnlock(h);
-            }
-        }
-        CloseClipboard();
-    }
-    return push_text(a, State{lua}, text);
-}
-
 // pp_map(name): the area the local player is in. Returns its number, for pp_state.
 extern "C" __declspec(dllexport) int pp_map(void* lua) {
     using namespace lua_link;
@@ -272,7 +250,7 @@ extern "C" __declspec(dllexport) int pp_reset(void* lua) {
     return 0;
 }
 
-// The player left: the relay closes its socket and waits for the next net_start.txt. Returns at once; the status line
+// The player left: the relay closes its Steam sessions and waits for the next net_start.txt. Returns at once; the status line
 // says stopped=yes when it's done.
 extern "C" __declspec(dllexport) int pp_stop(void* lua) {
     if (!lua_link::api()) return 0;

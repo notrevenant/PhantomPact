@@ -157,12 +157,12 @@ int wmain(int argc, wchar_t** argv) {
     FILE* out = _wfopen(argv[1], L"w");
     Net net;
     net.out = out;
-    const relay::Ini host_ini{{"pvp", "On"}, {"coopenemyhealth", "150"}, {"coopenemyposture", "130"}, {"role", "host"}, {"fourplayers", "off"}};
-    const relay::Ini guest_ini{{"pvp", "Off"}, {"coopenemyhealth", "150"}, {"role", "guest"}};
+    const relay::Settings host_ini{{"pvp", "On"}, {"coopenemyhealth", "150"}, {"coopenemyposture", "130"}, {"role", "host"}, {"fourplayers", "off"}};
+    const relay::Settings guest_ini{{"pvp", "Off"}, {"coopenemyhealth", "150"}, {"role", "guest"}};
     const auto quiet = [](const std::string&) {};
     relay::Mailbox host_box, guest_box;
-    relay::Relay host("host", L".", std::make_unique<Wire>(net, at(1), std::nullopt), nullptr, host_ini, "1.4.2", quiet, host_box);
-    relay::Relay guest("client", L".", std::make_unique<Wire>(net, at(2), at(1)), nullptr, guest_ini, "1.4.2", quiet, guest_box);
+    relay::Relay host("host", L".", std::make_unique<Wire>(net, at(1), std::nullopt), host_ini, "1.4.2", quiet, host_box);
+    relay::Relay guest("client", L".", std::make_unique<Wire>(net, at(2), at(1)), guest_ini, "1.4.2", quiet, guest_box);
     int n = 0;
     std::string read_host, read_guest;
     const auto step = [&](double seconds) {
@@ -236,6 +236,6 @@ int wmain(int argc, wchar_t** argv) {
     return 0;
 }
 
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, const std::string&) {
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool) {
     throw std::runtime_error("no Steam here");
 }
