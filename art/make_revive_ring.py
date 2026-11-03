@@ -1,12 +1,13 @@
 """Builds the revive gauge's frames (mod/PBZCoop/art/revive) from the Lumina ring art. The game can't draw a smooth
 ring by itself, so each state is a picture: g<bars>_<step>.png for the jade bars, t<step>.png for the timer around them.
-Needs Pillow: python art/make_revive_ring.py"""
+SIZE is well above the 72 units revive.lua shows it at, so it stays sharp on big screens (the Lua gives the widget its
+size). Needs Pillow: python art/make_revive_ring.py"""
 import os
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "mod", "PBZCoop", "art", "revive")
-SIZE = 128
+SIZE = 256
 K = 3
 GAP = 5
 STEPS_PER_BAR = 12
