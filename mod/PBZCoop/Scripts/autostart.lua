@@ -4,7 +4,8 @@
 --
 -- The relay is the built-in one (dlls\main.dll, native/ in the repo), which UE4SS loads with the game and which ends
 -- with it, or when the player leaves (api.online, for onlinepanel.lua). It always connects through Steam Networking: a
--- guest joins a Steam friend who is hosting, with no address to type.
+-- guest joins a Steam friend who is hosting, with no address to type: any of them, the one picked in the panel, or the one
+-- whose Join Game or invite the player took in Steam (steam_social.hpp).
 
 return function(api)
     local log, valid, getPlayer1 = api.log, api.valid, api.getPlayer1
@@ -69,13 +70,28 @@ return function(api)
         setupTip = text
     end
 
-    -- What to ask the relay for in this role, or nil if the role isn't an online one.
-    local function connection(wanted)
+    -- Friends hosting Phantom Pact now, as Steam's rich presence says: { { id = "7656...", name = "..." }... }.
+    local function hosts()
+        local out = {}
+        local text = api.link and api.link.steam_hosts and api.link.steam_hosts() or ""
+        for id, name in text:gmatch("(%d+)\t([^\n]*)\n") do
+            out[#out + 1] = { id = id, name = name }
+        end
+        return out
+    end
+
+    -- What to ask the relay for in this role, or nil if the role isn't an online one. target: a guest's one host, by
+    -- SteamID64 (17 digits), and the name to show for it.
+    local function connection(wanted, target, targetName)
         local modRole = ({ host = "host", guest = "client" })[wanted]
         if not modRole then
             return nil
         end
-        return { role = wanted, modRole = modRole }
+        local c = { role = wanted, modRole = modRole }
+        if modRole == "client" and type(target) == "string" and target:match("^%d+$") and #target == 17 then
+            c.target, c.targetName = target, targetName or target
+        end
+        return c
     end
 
     -- The relay's thread waits for net_start.txt, which appears whole thanks to the rename. It carries all the relay
@@ -89,6 +105,9 @@ return function(api)
             "fourplayers=" .. (onOff(s.fourplayers, "off") and "on" or "off"),
             "steamdirect=" .. (onOff(s.steamdirect, "off") and "on" or "off"),
             "pvp=" .. (onOff(s.pvp, "off") and "on" or "off") }
+        if c.target then
+            lines[#lines + 1] = "peer=" .. c.target
+        end
         local path = modDir() .. "net_start.txt"
         writeText(path .. ".tmp", table.concat(lines, "\n") .. "\n")
         os.remove(path)
@@ -96,8 +115,10 @@ return function(api)
             setupProblem("Couldn't start the relay: net_start.txt can't be written in " .. modDir())
             return false
         end
-        log("Relay started as " .. c.role .. (c.modRole == "client" and ", looking for a Steam friend who's hosting" or "")
-            .. " over Steam.")
+        local joining = c.modRole ~= "client" and ""
+            or c.target and (", joining " .. c.targetName)
+            or ", looking for a Steam friend who's hosting"
+        log("Relay started as " .. c.role .. joining .. " over Steam.")
         return true
     end
 
@@ -109,8 +130,35 @@ return function(api)
         return line ~= nil and line:find("role=" .. current.modRole .. " ", 1, true) ~= nil
     end
 
+    -- Join Game on a friend in Steam's list, or an invite accepted: join that friend as a guest, whatever this PC was
+    -- doing. (Kept as Guest for the next start, like the panel's GUEST; the friend picked isn't kept.)
+    local function joinFromSteam(id)
+        if type(id) ~= "string" or #id ~= 17 or not id:match("^%d+$") then
+            log("Steam asked to join something that isn't a SteamID64: ignored.")
+            return
+        end
+        local name = id
+        for _, h in ipairs(hosts()) do
+            if h.id == id then
+                name = h.name
+            end
+        end
+        local c = connection("guest", id, name)
+        if not c or not api.online then
+            return
+        end
+        log("Steam asked to join " .. name .. " (" .. id .. ").")
+        api.settings.save({ Role = "Guest" })
+        api.online.start(c, api.settings.read())
+        setupTip = "Joining " .. name .. " from Steam."
+    end
+
     -- Sync on once the relay has answered and the player is in the world.
     LoopInGameThreadWithDelay(500, function()
+        local join = api.link and api.link.steam_join and api.link.steam_join()
+        if join then
+            pcall(joinFromSteam, join)
+        end
         if setupTip then
             pcall(function()
                 local _, pawn = getPlayer1()
@@ -157,6 +205,7 @@ return function(api)
     api.online = {
         settings = api.settings.read,
         connection = connection,
+        hosts = hosts,
         current = function()
             return current
         end,

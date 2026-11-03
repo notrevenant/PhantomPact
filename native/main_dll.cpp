@@ -8,6 +8,7 @@
 #include "relay.hpp"
 #include "lua_link.hpp"
 #include "pad_route.hpp"
+#include "steam_social.hpp"
 
 namespace {
 
@@ -151,6 +152,7 @@ DWORD WINAPI watch_thread(void*) {
 extern "C" __declspec(dllexport) void* start_mod() {
     if (InterlockedExchange(&started, 1) == 0) {
         find_folders();
+        steam_social::start();
         CloseHandle(CreateThread(nullptr, 0, watch_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, pads_thread, nullptr, 0, nullptr));
         CloseHandle(CreateThread(nullptr, 0, route::watch, &mod_dir, 0, nullptr));

@@ -1992,6 +1992,6 @@ int wmain(int argc, wchar_t** argv) {
 }
 
 // The console tool has no game around it, so no Steam.
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool) {
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool, uint64_t) {
     throw std::runtime_error("relay_cli has no Steam: the Steam link only works inside the game");
 }

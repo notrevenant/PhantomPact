@@ -21,6 +21,14 @@ function Relay:linkFor(pc)
     local link = {}
     pc.heard, pc.inbox, pc.enemyLines, pc.sent = {}, {}, {}, {}
     function link.now() return pc.now end
+    -- Steam's friends features (steam_social.hpp): who's hosting, as the test sets pc.steamHosts, and a Join Game taken in
+    -- Steam, as pc.steamJoin, handed over once.
+    function link.steam_hosts() return pc.steamHosts or "" end
+    function link.steam_join()
+        local id = pc.steamJoin
+        pc.steamJoin = nil
+        return id
+    end
     function link.wall() return pc.now end
     function link.state(...)
         local s = { ... }
@@ -267,6 +275,7 @@ function Relay:step(now)
     for _, pc in ipairs(self.pcs) do
         if pc.files["net_start.txt"] then
             pc.relay = pc.files["net_start.txt"]:match("role=(%w+)")
+            pc.started = pc.files["net_start.txt"]
             pc.files["net_start.txt"] = nil
         end
     end

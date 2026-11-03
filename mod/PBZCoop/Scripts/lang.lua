@@ -12,6 +12,7 @@ return function()
         ["Starting..."] = "正在启动……",
         ["Waiting for a partner."] = "正在等待队友。",
         ["Looking for a Steam friend who's hosting..."] = "正在寻找开房的 Steam 好友……",
+        ["No friend is hosting right now. GUEST waits for one."] = "现在没有好友在开房。按“加入”会等待好友开房。",
         ["this game update isn't tested with this Phantom Pact version; some co-op features may fail."] =
             "这个游戏版本尚未用当前的 Phantom Pact 测试过,部分联机功能可能失效。",
         ["Couldn't start the relay: dlls\\main.dll can't be reached. Reinstall Phantom Pact, check your antivirus didn't remove it, and use the UE4SS build from the install guide."] =
@@ -57,6 +58,9 @@ return function()
         { "^Couldn't start: ", "无法启动:" },
         { "^Couldn't start the relay: net_start%.txt can't be written in (.+)$", "无法启动联机模块:无法写入 %1 里的 net_start.txt" },
         { "^Looking for (.+)%.%.%.$", "正在寻找 %1……" },
+        { "^Joining (.+) when you press GUEST%. Press Steam for another friend%.$", "按“加入”后会加入 %1。再按 Steam 可以换一位好友。" },
+        { "^Any friend who's hosting%. Press Steam to pick one %((%d+) hosting%)%.$", "加入任意正在开房的好友。按 Steam 可以选择一位(%1 位正在开房)。" },
+        { "^Joining (.+) from Steam%.$", "正在通过 Steam 加入 %1。" },
         { "^your partner is on another map%.", "队友在另一张地图上。" },
         { "^your partner is (%d+) m away%.", "队友在 %1 米外。" },
         { " F3 takes you there%.$", " 按 F3 传送过去。" },

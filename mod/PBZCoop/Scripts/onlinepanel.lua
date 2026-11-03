@@ -21,7 +21,7 @@ return function(api)
     local CLOSE = { x = 848, y = 14, w = 38, h = 38 }
     -- main.dll clicks the panel's middle as it opens and on coming back to the game (see free_cursor): no click counts for
     -- REFOCUS_S then.
-    local STEAM = { x = 40, y = 244 }  -- the way to connect: always Steam, shown as the one card
+    local STEAM = { x = 40, y = 244 }  -- the way to connect: always Steam. Pressed, it picks which friend GUEST joins
     local BUTTONS = { host = { x = 40, y = 350 }, join = { x = 228, y = 350 }, leave = { x = 416, y = 350 } }
     local LANGUAGE = { en = { x = 40, y = 18 }, zh = { x = 124, y = 18 } }
     local LANGUAGE_W, LANGUAGE_H = 76, 30
@@ -42,6 +42,7 @@ return function(api)
     }
 
     local panel = { open = false }
+    local pick = nil                -- the friend GUEST joins: { id, name } from api.online.hosts(), or nil for any friend
     local pc = nil
     local wasKey, wasDown, keyArmed, keyHeld, escHeld = false, false, false, false, false
     local wasFocused, clicksFrom = false, 0
@@ -157,7 +158,7 @@ return function(api)
         if c.modRole == "host" then
             return "Waiting for a partner."
         end
-        return "Looking for a Steam friend who's hosting..."
+        return c.target and ("Looking for " .. c.targetName .. "...") or "Looking for a Steam friend who's hosting..."
     end
 
     local function showWords(now)
@@ -202,9 +203,35 @@ return function(api)
             save({ Role = "Off" })
             return
         end
-        local c = api.online.connection(what == "host" and "host" or "guest")
+        local c = api.online.connection(what == "host" and "host" or "guest", pick and pick.id, pick and pick.name)
         save({ Role = what == "host" and "Host" or "Guest" })
         api.online.start(c, api.settings.read())
+    end
+
+    -- The Steam card, pressed: the next friend who's hosting, then any friend again. Steam's own list, read each press, so a
+    -- friend who stopped hosting drops out. Only for this game: the next start joins any friend again.
+    local function pickFriend()
+        local list = api.online.hosts and api.online.hosts() or {}
+        local nextOne = nil
+        if #list > 0 then
+            local at = 0
+            for i, h in ipairs(list) do
+                if pick and h.id == pick.id then
+                    at = i
+                end
+            end
+            nextOne = list[at + 1]      -- past the last: any friend. One who stopped hosting: the first again
+        end
+        pick = nextOne
+        wordsAt = 0
+        if pick then
+            note = "Joining " .. pick.name .. " when you press GUEST. Press Steam for another friend."
+        elseif #list == 0 then
+            note = "No friend is hosting right now. GUEST waits for one."
+        else
+            note = string.format("Any friend who's hosting. Press Steam to pick one (%d hosting).", #list)
+        end
+        log("Online panel: " .. note)
     end
 
     local function setLanguage(code)
@@ -260,6 +287,9 @@ return function(api)
                 setLanguage(code)
             end
         end
+        if not running() and kit.inside(x, y, STEAM, CARD_W, CARD_H) then
+            pickFriend()
+        end
     end
 
     ------------------------------------------------------------------ on screen
@@ -296,7 +326,9 @@ return function(api)
         end
         local lang = LANGUAGE[api.lang.code]
         kit.place(kit.part("on_sel_lang", "sel_lang", LANGUAGE_W, LANGUAGE_H, 2), lang.x, lang.y)
-        kit.place(worded("on_steam", "online_steam", CARD_W, CARD_H, 1), STEAM.x, STEAM.y)
+        local card = worded("on_steam", "online_steam", CARD_W, CARD_H, 1)
+        kit.place(card, STEAM.x, STEAM.y)
+        kit.dim(card, c and 0.3 or 1.0)
         kit.place(kit.part("on_sel_card", "sel_card", CARD_W, CARD_H, 2), STEAM.x, STEAM.y)
         -- Your role is the red one.
         local mine = c and (c.modRole == "host" and "host" or "join")
@@ -439,7 +471,7 @@ return function(api)
 
     panel.describe = describe       -- for tools/netlab/bench/online-panel.ps1
 
-    -- onlinepanel toggle|host|join|leave|press <x> <y>|row <name>: what the keys and the mouse do, for tests.
+    -- onlinepanel toggle|host|join|leave|steam|press <x> <y>|row <name>: what the keys and the mouse do, for tests.
     function panel.command(rest)
         local word, x, y = (rest or ""):match("^(%S*)%s*(%S*)%s*(%S*)")
         if word == "toggle" then
@@ -451,6 +483,8 @@ return function(api)
         elseif word == "host" or word == "join" or word == "leave" then
             local r = BUTTONS[word]
             press(r.x + 5, r.y + 5)
+        elseif word == "steam" then
+            press(STEAM.x + 5, STEAM.y + 5)
         elseif word == "press" then
             press(tonumber(x), tonumber(y))
         elseif word == "row" then

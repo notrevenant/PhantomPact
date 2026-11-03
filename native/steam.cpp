@@ -7,6 +7,7 @@
 // lanes.hpp do what reliability is needed.
 // Calls the link can live without are looked up with find_optional: a Steam that lacks them still links, only slower.
 #include "relay.hpp"
+#include "steam_social.hpp"
 
 #include <cstddef>
 #include <mutex>
@@ -20,6 +21,7 @@ constexpr int SEND_AUTO_RESTART_BROKEN_SESSION = 32;
 constexpr int FRIEND_FLAG_IMMEDIATE = 4;       // regular Steam friends
 constexpr int IDENTITY_TYPE_STEAMID = 16;
 constexpr int CALLBACK_SESSION_REQUEST = 1251; // SteamNetworkingMessagesSessionRequest_t
+constexpr int CALLBACK_JOIN_REQUESTED = 337;    // GameRichPresenceJoinRequested_t: Join Game, or an accepted invite
 constexpr int CONFIG_SEND_RATE_MIN = 10;       // ESteamNetworkingConfigValue
 constexpr int CONFIG_SEND_RATE_MAX = 11;
 constexpr int CONFIG_ICE_ENABLE = 104;         // P2P_Transport_ICE_Enable: what may be tried for a direct route
@@ -35,6 +37,9 @@ constexpr double CONNECTING_SEND_GAP = 0.25;
 constexpr double ACCEPT_SWEEP_EVERY = 1.0;
 constexpr double FRIENDS_REFRESH = 5.0;
 constexpr int STEAM_WAIT_S = 20;
+constexpr double HOSTING_REFRESH = 10.0;
+constexpr char JOIN_KEY[] = "connect";         // the rich presence key Steam's Join Game and invites use
+constexpr char JOIN_WORD[] = "+pp_join";       // what this mod puts in it, then the host's SteamID64
 
 // Up to 1200 bytes go in one datagram (MTU_DataSize), Steam's own header of 5 included. A longer unreliable message is
 // split, and one lost piece loses all of it; past 16500 bytes Steam makes it reliable. A packet never gets there.
@@ -160,9 +165,132 @@ void tune(HMODULE dll, void* utils, bool direct) {
     set(utils, CONFIG_RELAY_PENALTY, direct ? RELAY_PENALTY_MS : 0);
 }
 
+
+// What the friends features need from Steam, found once Steam is up. Each call may be missing (null): then that feature is
+// off, and the link works as before.
+struct Social {
+    std::mutex lock;
+    bool found = false;
+    void* friends = nullptr;
+    uint64_t self = 0;
+    int (*friend_count)(void*, int) = nullptr;
+    uint64_t (*friend_by_index)(void*, int, int) = nullptr;
+    bool (*friend_game)(void*, uint64_t, FriendGameInfo*) = nullptr;
+    const char* (*friend_name)(void*, uint64_t) = nullptr;
+    bool (*set_presence)(void*, const char*, const char*) = nullptr;
+    const char* (*friend_presence)(void*, uint64_t, const char*) = nullptr;
+    void (*request_presence)(void*, uint64_t) = nullptr;
+    std::string join;             // a join asked for and not yet taken: the host's SteamID64
+    bool hosting = false;
+    double hosting_at = -1e9;
+};
+
+Social social;
+
+// A SteamID64 as Steam gives it to a friend (individual, public universe), from digits; 0 if it isn't one.
+uint64_t parse_id(const std::string& text) {
+    if (text.size() != 17 || !std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; })) return 0;
+    return std::strtoull(text.c_str(), nullptr, 10);
+}
+
+// The id after "+pp_join " in a connect string or a command line; 0 if there's none.
+uint64_t id_in(const std::string& text) {
+    const size_t at = text.find(JOIN_WORD);
+    if (at == std::string::npos) return 0;
+    size_t from = at + sizeof JOIN_WORD - 1;
+    while (from < text.size() && (text[from] == ' ' || text[from] == '"')) from++;
+    return parse_id(text.substr(from, 17));
+}
+
+// Under social.lock. True once Steam's friends interface is there.
+bool social_ready() {
+    if (social.found) return true;
+    HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
+    if (!dll) return false;
+    auto get_friends = find_optional<void* (*)()>(dll, "SteamAPI_SteamFriends_v018");
+    void* friends = get_friends ? get_friends() : nullptr;
+    if (!friends) return false;
+    social.friends = friends;
+    social.friend_count = find_optional<int (*)(void*, int)>(dll, "SteamAPI_ISteamFriends_GetFriendCount");
+    social.friend_by_index = find_optional<uint64_t (*)(void*, int, int)>(dll, "SteamAPI_ISteamFriends_GetFriendByIndex");
+    social.friend_game = find_optional<bool (*)(void*, uint64_t, FriendGameInfo*)>(dll, "SteamAPI_ISteamFriends_GetFriendGamePlayed");
+    social.friend_name = find_optional<const char* (*)(void*, uint64_t)>(dll, "SteamAPI_ISteamFriends_GetFriendPersonaName");
+    social.set_presence = find_optional<bool (*)(void*, const char*, const char*)>(dll, "SteamAPI_ISteamFriends_SetRichPresence");
+    social.friend_presence = find_optional<const char* (*)(void*, uint64_t, const char*)>(dll, "SteamAPI_ISteamFriends_GetFriendRichPresence");
+    social.request_presence = find_optional<void (*)(void*, uint64_t)>(dll, "SteamAPI_ISteamFriends_RequestFriendRichPresence");
+    // This player's own SteamID64, for the connect string: Steam's version of the accessor differs between SDKs.
+    auto get_id = find_optional<uint64_t (*)(void*)>(dll, "SteamAPI_ISteamUser_GetSteamID");
+    for (const char* name : {"SteamAPI_SteamUser_v023", "SteamAPI_SteamUser_v022", "SteamAPI_SteamUser_v021", "SteamAPI_SteamUser_v020"}) {
+        auto get_user = find_optional<void* (*)()>(dll, name);
+        void* user = get_user ? get_user() : nullptr;
+        if (user && get_id) {
+            social.self = get_id(user);
+            break;
+        }
+    }
+    social.found = true;
+    return true;
+}
+
+// Join Game on a friend in Steam's list, or an invite accepted, while this game runs. Steam calls it on the game's own
+// callback thread: it only notes who.
+class JoinRequestCallback : public CCallbackBase {
+public:
+    void Run(void* param) override {
+        if (!param) return;
+        const auto* request = static_cast<const JoinRequest*>(param);
+        char connect[sizeof request->connect + 1] = {};
+        std::memcpy(connect, request->connect, sizeof request->connect);
+        uint64_t host = id_in(connect);
+        if (!host) host = request->friend_id;     // whoever's game it is: the connect string came from them
+        std::lock_guard<std::mutex> lock(social.lock);
+        social.join = std::to_string(host);
+    }
+    void Run(void* param, bool, uint64_t) override { Run(param); }
+    int GetCallbackSizeBytes() override { return static_cast<int>(sizeof(JoinRequest)); }
+
+private:
+    struct JoinRequest {
+        uint64_t friend_id;
+        char connect[256];
+    };
+};
+
+JoinRequestCallback join_request_callback;
+
+// Waits for Steam (the mod loads before the game signs in), then listens for join requests for the life of the game.
+DWORD WINAPI social_thread(void*) {
+    // Started by Steam to join a friend: the connect string is on the command line, if the launcher passed it on.
+    const std::wstring line = GetCommandLineW();
+    std::string narrow;
+    for (wchar_t c : line) narrow.push_back(c < 128 ? static_cast<char>(c) : '?');
+    if (const uint64_t host = id_in(narrow)) {
+        std::lock_guard<std::mutex> lock(social.lock);
+        social.join = std::to_string(host);
+    }
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(social.lock);
+            if (social_ready()) break;
+        }
+        Sleep(1000);
+    }
+    HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
+    if (auto reg = find_optional<void (*)(CCallbackBase*, int)>(dll, "SteamAPI_RegisterCallback"))
+        reg(&join_request_callback, CALLBACK_JOIN_REQUESTED);
+    return 0;
+}
+
+// Under social.lock: whether this friend's rich presence says they're hosting Phantom Pact.
+bool hosting_locked(uint64_t id) {
+    if (!social.friend_presence) return false;
+    const char* connect = social.friend_presence(social.friends, id, JOIN_KEY);
+    return connect && std::strstr(connect, JOIN_WORD);
+}
+
 class SteamLink : public relay::Link {
 public:
-    SteamLink(bool direct) {
+    SteamLink(const std::string& role, bool direct, uint64_t target) : host_(role == "host"), target_(target) {
         HMODULE dll = GetModuleHandleW(L"steam_api64.dll");
         if (!dll) throw std::runtime_error("Steam isn't loaded in this game (steam_api64.dll)");
         auto get_friends = find_fn<void* (*)()>(dll, "SteamAPI_SteamFriends_v018");
@@ -201,11 +329,19 @@ public:
                                                                                      CALLBACK_SESSION_REQUEST);
             callback_registered = true;
         }
+        // A guest joining one friend, picked in the panel or from Steam: only that friend is tried.
+        if (!host_ && target_) {
+            relay::Addr a;
+            a.steam = target_;
+            peer = a;
+        }
+        if (host_) steam_social::set_hosting(true);
     }
 
     // Leaving: nothing of this run may reach the next one. Closing also drops whatever the partner sent since the last
     // receive, and it's better than leaving them sending into a queue nobody reads.
     ~SteamLink() override {
+        if (host_) steam_social::set_hosting(false);
         if (!close_) return;
         for (const auto& session : sessions_) {
             Identity id = identity(session.first);
@@ -237,6 +373,7 @@ public:
     }
 
     std::vector<std::pair<relay::Addr, std::string>> receive() override {
+        if (host_) steam_social::set_hosting(true);      // (cheap: it only calls Steam every few seconds)
         accept_friends();
         std::vector<std::pair<relay::Addr, std::string>> out;
         Message* batch[32];
@@ -277,6 +414,15 @@ public:
         if (now - friends_at_ >= FRIENDS_REFRESH) {
             friends_at_ = now;
             playing_.clear();
+            if (target_) {
+                relay::Addr a;
+                a.steam = target_;
+                playing_.push_back(a);
+                return playing_;
+            }
+            // Friends who say they're hosting come first, and alone if there are any: the others would only be knocked on
+            // for nothing. A Steam that doesn't tell (no rich presence) leaves everyone in the game.
+            std::vector<relay::Addr> hosting;
             int count = friend_count_(friends_, FRIEND_FLAG_IMMEDIATE);
             for (int i = 0; i < count; i++) {
                 uint64_t id = friend_by_index_(friends_, i, FRIEND_FLAG_IMMEDIATE);
@@ -285,7 +431,9 @@ public:
                 relay::Addr a;
                 a.steam = id;
                 playing_.push_back(a);
+                if (steam_social::is_hosting(id)) hosting.push_back(a);
             }
+            if (!hosting.empty()) playing_ = std::move(hosting);
         }
         return playing_;
     }
@@ -370,6 +518,8 @@ private:
     int (*session_info_)(void*, const Identity*, SessionInfo*, SessionStatus*) = nullptr;
     bool (*close_)(void*, const Identity*) = nullptr;
     std::string problem_;
+    bool host_ = false;
+    uint64_t target_ = 0;
     std::vector<relay::Addr> playing_;
     std::map<uint64_t, double> sessions_;    // everyone this run talked to, and the last send while their session wasn't up
     double friends_at_ = -1e9, heard_at_ = -1e9, swept_at_ = -1e9;
@@ -377,6 +527,52 @@ private:
 
 }  // namespace
 
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool direct) {
-    return std::make_unique<SteamLink>(direct);
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string& role, bool direct, uint64_t target) {
+    return std::make_unique<SteamLink>(role, direct, target);
+}
+
+void steam_social::start() {
+    CloseHandle(CreateThread(nullptr, 0, social_thread, nullptr, 0, nullptr));
+}
+
+std::string steam_social::take_join() {
+    std::lock_guard<std::mutex> lock(social.lock);
+    std::string join;
+    join.swap(social.join);
+    return join;
+}
+
+std::string steam_social::hosts() {
+    std::lock_guard<std::mutex> lock(social.lock);
+    if (!social_ready() || !social.friend_count || !social.friend_by_index || !social.friend_game) return "";
+    std::string out;
+    const int count = social.friend_count(social.friends, FRIEND_FLAG_IMMEDIATE);
+    for (int i = 0; i < count; i++) {
+        const uint64_t id = social.friend_by_index(social.friends, i, FRIEND_FLAG_IMMEDIATE);
+        FriendGameInfo info{};
+        if (!social.friend_game(social.friends, id, &info) || (info.game_id & 0xFFFFFF) != APP_ID) continue;
+        if (social.request_presence) social.request_presence(social.friends, id);     // fresh for the next look
+        if (!hosting_locked(id)) continue;
+        std::string name = social.friend_name ? (social.friend_name(social.friends, id) ? social.friend_name(social.friends, id) : "") : "";
+        for (char& c : name)
+            if (static_cast<unsigned char>(c) < ' ') c = ' ';     // one line, one tab, whatever the name has
+        out += std::to_string(id) + "\t" + (name.empty() ? std::to_string(id) : name) + "\n";
+    }
+    return out;
+}
+
+bool steam_social::is_hosting(uint64_t friend_id) {
+    std::lock_guard<std::mutex> lock(social.lock);
+    return social_ready() && hosting_locked(friend_id);
+}
+
+void steam_social::set_hosting(bool on) {
+    std::lock_guard<std::mutex> lock(social.lock);
+    if (!social_ready() || !social.set_presence) return;
+    const double now = relay::monotonic();
+    if (on && social.hosting && now - social.hosting_at < HOSTING_REFRESH) return;
+    social.hosting = on;
+    social.hosting_at = now;
+    const std::string connect = std::string(JOIN_WORD) + (social.self ? " " + std::to_string(social.self) : "");
+    social.set_presence(social.friends, JOIN_KEY, on ? connect.c_str() : nullptr);
 }

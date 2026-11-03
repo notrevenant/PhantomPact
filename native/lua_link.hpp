@@ -7,6 +7,7 @@
 // returns nothing, which the mod reports instead of crashing.
 #pragma once
 #include "relay.hpp"
+#include "steam_social.hpp"
 
 namespace lua_link {
 
@@ -226,6 +227,23 @@ extern "C" __declspec(dllexport) int pp_status(void* lua) {
     using namespace lua_link;
     const Api* a = api();
     return a ? push_text(a, State{lua}, relay::mail.status()) : 0;
+}
+
+// pp_steam_join(): the SteamID64 of a friend the player asked to join from Steam (Join Game, or an accepted invite), once;
+// nothing if none is waiting. The mod then joins them as a guest.
+extern "C" __declspec(dllexport) int pp_steam_join(void* lua) {
+    using namespace lua_link;
+    const Api* a = api();
+    if (!a) return 0;
+    const std::string id = steam_social::take_join();
+    return id.empty() ? 0 : push_text(a, State{lua}, id);
+}
+
+// pp_steam_hosts(): friends hosting Phantom Pact now, one "<SteamID64>\t<name>" a line, for the panel's picker.
+extern "C" __declspec(dllexport) int pp_steam_hosts(void* lua) {
+    using namespace lua_link;
+    const Api* a = api();
+    return a ? push_text(a, State{lua}, steam_social::hosts()) : 0;
 }
 
 // pp_map(name): the area the local player is in. Returns its number, for pp_state.

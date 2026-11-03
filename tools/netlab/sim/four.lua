@@ -1106,6 +1106,52 @@ local function modeRow()
     check(count(pc.logs, "Multiplayer starts the next time you start the game%.") == 1, "and says when")
 end
 
+local function steamFriends()
+    part("Steam friends: the picker and Join Game")
+    local ALICE, BOB = "76561198000000002", "76561198000000003"
+    local s = Session.new(SIM_SCRIPTS, { "Off" }, false, ENEMIES)
+    s:run(2)
+    local pc = s.pcs[1]
+    Session.command(pc, "onlinepanel steam")
+    s:run(1)
+    check(count(pc.logs, "No friend is hosting right now") >= 1, "with nobody hosting, the Steam card says so")
+    pc.steamHosts = ALICE .. "\tAlice\n" .. BOB .. "\tBob\n"
+    Session.command(pc, "onlinepanel steam")
+    s:run(1)
+    check(count(pc.logs, "Joining Alice when you press GUEST") >= 1, "pressed, it picks the first friend hosting")
+    Session.command(pc, "onlinepanel steam")
+    s:run(1)
+    check(count(pc.logs, "Joining Bob when you press GUEST") >= 1, "then the next")
+    Session.command(pc, "onlinepanel steam")
+    s:run(1)
+    check(count(pc.logs, "Any friend who's hosting%. Press Steam to pick one %(2 hosting%)") >= 1, "then any friend again")
+    Session.command(pc, "onlinepanel steam")
+    Session.command(pc, "onlinepanel join")
+    s:run(1)
+    check(pc.relay == "client" and (pc.started or ""):find("peer=" .. ALICE, 1, true) ~= nil, "GUEST joins the friend picked")
+    check(count(pc.logs, "Relay started as guest, joining Alice over Steam") == 1, "and says who")
+    Session.command(pc, "onlinepanel leave")
+    s:run(1)
+    Session.command(pc, "onlinepanel join")
+    s:run(1)
+    check((pc.started or ""):find("peer=" .. ALICE, 1, true) ~= nil, "the pick stays for the next GUEST, until the Steam card changes it")
+
+    local t = Session.new(SIM_SCRIPTS, { "Host" }, false, ENEMIES)
+    t:run(2)
+    pc = t.pcs[1]
+    pc.steamHosts = BOB .. "\tBob\n"
+    pc.steamJoin = BOB
+    t:run(1)
+    check(pc.relay == "client" and (pc.started or ""):find("peer=" .. BOB, 1, true) ~= nil, "Join Game in Steam: a host becomes Bob's guest")
+    check(setting(pc, "role") == "Guest" and count(pc.logs, "Steam asked to join Bob") == 1, "kept as Guest, and logged")
+    pc.steamJoin = "not an id"
+    t:run(1)
+    check(count(pc.logs, "Steam asked to join not an id") == 0 and (pc.started or ""):find("peer=" .. BOB, 1, true) ~= nil,
+        "and nothing that isn't a SteamID64 is followed")
+    allErrors(s)
+    allErrors(t)
+end
+
 local function offThings()
     part("what stays two-player")
     local s = party(nil, "PvP = On\n")
@@ -1309,6 +1355,7 @@ return function(print_, scripts)
     fogAfterLeaving()
     devUnits()
     modeRow()
+    steamFriends()
     offThings()
     screens()
     panel()

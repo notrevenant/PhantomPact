@@ -236,6 +236,6 @@ int wmain(int argc, wchar_t** argv) {
     return 0;
 }
 
-std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool) {
+std::unique_ptr<relay::Link> relay::make_steam_link(const std::string&, bool, uint64_t) {
     throw std::runtime_error("no Steam here");
 }

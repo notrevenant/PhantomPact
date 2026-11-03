@@ -1089,7 +1089,7 @@ namespace relay {
 struct Options {
     std::string role;              // "host" or "client"
     std::wstring dir;              // the mod's files
-    Settings settings;             // what the mod's start file says: fourplayers, steamdirect and the shared settings
+    Settings settings;             // what the mod's start file says: fourplayers, steamdirect, peer and the shared settings
     std::string version = "?";
     double seconds = 0;            // 0 = for the life of the game
     // Where the packets go. Unset in the game: Steam Networking. relay_cli's bench sets its own (tests only).
@@ -1097,7 +1097,8 @@ struct Options {
 };
 
 // direct: SteamDirect from the panel, which lets Steam try a direct route (the partner can then see this PC's IP).
-std::unique_ptr<Link> make_steam_link(const std::string& role, bool direct);
+// target: a guest's chosen host, as a SteamID64 (picked in the panel, or Join Game in Steam); 0 for any friend hosting.
+std::unique_ptr<Link> make_steam_link(const std::string& role, bool direct, uint64_t target);
 
 // Runs until the player leaves (Mailbox::ask_stop), at most for the life of the game: it lives in the game's own process,
 // so it can't outlive it. A failure leaves relay_error.txt next to the status, since nobody watches a console inside the game.
@@ -1108,8 +1109,11 @@ inline void run(Options o, const std::function<void(const std::string&)>& log) {
     std::string failure;
     try {
         Settings& settings = o.settings;
+        const std::string& peer = settings["peer"];
+        const uint64_t target = peer.size() == 17 && std::all_of(peer.begin(), peer.end(), [](char c) { return c >= '0' && c <= '9'; })
+                                    ? std::strtoull(peer.c_str(), nullptr, 10) : 0;
         std::unique_ptr<Link> link = o.make_link ? o.make_link(o)
-                                                 : make_steam_link(o.role, lower(settings["steamdirect"]) == "on");
+                                                 : make_steam_link(o.role, lower(settings["steamdirect"]) == "on", target);
         const auto serve = [&](auto& relay) {
             log("PBZCoop relay " + o.role + " on " + relay.describe_self());
             const double start = monotonic();
