@@ -1,19 +1,18 @@
 # Local co-op (split screen) in Phantom Pact 1.5.1
 
-Mode > LOCAL under MORE in the F5 panel, or `Role = Local` in `PhantomPact.ini`, puts two players on one PC, side by side on
+Mode > LOCAL under MORE in the F5 panel puts two players on one PC, side by side on
 one screen, no internet and no second PC. It is in testing: the whole of 1.5.0's local co-op work was done on Xigu with two DualSense pads through
 DS4Windows, and the rest of the game has not been walked through yet.
 
 ## Setup
 
 1. Install the mod as for online play (INSTALL.md).
-2. In the game press F5, then MORE, and set Mode to LOCAL. It works from the next start, so restart the game. (Or in
-   `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini` set `Role = Local` before you start.) `Joysticks = 2` there means one pad
-   per player, the default. `Joysticks = 1` means keyboard and mouse for player 1, the pad for player 2.
+2. In the game press F5, then MORE, and set Mode to LOCAL. It works from the next start, so restart the game. It starts
+   with one pad per player; the F4 panel can give player 1 the keyboard and mouse instead.
 3. Start the game and CONTINUE your save. Player 2 appears beside player 1 within a few seconds, as a second Soul.
 4. F4 opens the local co-op panel in the game: screen layout (left/right or top/bottom) and which pad is whose, by
-   dragging. Its choices replace the ini setting.
-5. MULTIPLAYER in that panel goes back to online co-op, from the next start of the game: it sets `Role = Off`, and F5 works again.
+   dragging. Its choices are kept for the next start.
+5. MULTIPLAYER in that panel goes back to online co-op, from the next start of the game, and F5 works again.
    Local co-op can't be turned off live, since taking player 2 away at the wrong moment has killed the game's menus.
 
 Player 2 shares player 1's save, backpack, dust and gourd count, and rests at the same bells. Player 2 cannot die for

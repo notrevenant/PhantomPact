@@ -47,7 +47,7 @@ for people and tools to read.
 
 ## Packets
 
-Little-endian, at most 1100 bytes before signing (`MAX_PACKET`), so a signed packet stays under Tailscale's 1280.
+Little-endian, at most 1100 bytes (`MAX_PACKET`), so a packet with Steam's own header stays in one Steam datagram (1200).
 
 Header: marker 0xA3, protocol 3, flags (1 = from the host), session, the partner's session as we know it, sequence, sender's
 time in ms, the partner's time echoed back, how long we held it, sure-lane acknowledgement (next id expected, plus a bitmap

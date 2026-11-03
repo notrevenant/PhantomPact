@@ -97,34 +97,34 @@ Watch for an error/exception widget after every step (list visible widgets with 
 | Flow | `Checkpoint`, `Save`, `Respawn`, `Sequence`, `Cinematic`, `Boss` |
 | Error UI | `Exception`, `Error` widgets |
 
-## 6. Online over Tailscale
+## 6. Online over Steam
 
-Built 2026-10-28, Tailscale first because we can test it ourselves; Steam came later as a second transport. How it
+Built 2026-10-28, Tailscale first because we could test it ourselves; Steam came later as a second transport, and is now
+the only one: the UDP link, Tailscale and the ini are gone. How it
 works now is in [NETCODE.md](NETCODE.md), protocol 3 since 1.5.0. The relay is the one built into `main.dll`; the Python
 relay this section first described is out of the game.
 
 | Piece | What it does |
 |---|---|
-| `native/`, shipped as `dlls\main.dll` | UDP relay inside the game. `Role = Host` listens on UDP 47800, `Role = Guest` connects to the host's Tailscale IP. Writes `net_status.txt` once a second. |
-| `autostart.lua` | Reads `PhantomPact.ini`, starts the relay through `net_start.txt`, and sends `neton` once the player is in the world. |
+| `native/`, shipped as `dlls\main.dll` | The relay inside the game, over Steam Networking. The host accepts Steam friends; the guest finds a friend who's hosting. Writes `net_status.txt` once a second. |
+| `autostart.lua` | Reads what the F5 panel saved (`settings.txt`), starts the relay through `net_start.txt`, and sends `neton` once the player is in the world. |
 | Mod `neton` / `netoff` / `netstatus` | Turn sync on or off, or print the link's state. The partner is a ghost: a puppet, not a local player, so no P2 controller. |
 | `tools/pbz-setup.ps1` | One-shot launch-day setup (game info, save backup, UE4SS, configs, mod). `-Disable` / `-Enable` toggles UE4SS. |
 
 **Machines:** this PC `yhsharaf` = `100.112.4.45`; second PC `desktop-gfqd042` = `100.92.213.68`.
 
-**Main test method: two copies on this PC.** [tools/netlab/README.md](../tools/netlab/README.md) runs them from a
-separate install, `C:\PBZDev`. Why this method: one Steam account can't run PBZ on two PCs at once, so the second PC
-would need a second account that owns the game.
+**Test method: two copies on this PC.** [tools/netlab/README.md](../tools/netlab/README.md) runs them from a
+separate install, `C:\PBZDev`. With Steam the only connection, they start their relays but can't connect: one account
+can't reach itself. A connected test needs a second PC with a second account that owns the game, friends with the first.
 
 What launch taught us about two copies:
 - **PBZ refuses a second copy** unless it's started with `-allowmultipleinstances`, the game's own switch.
 - **Both copies share one save folder and one `UE4SS.log`** when they run from the same install. Log lines from copy 2
   are tagged `[PBZCoop#2]`.
 
-**Two PCs:** there's no game-free relay test between PCs now: the bots in `relay_cli` bind to loopback only. Run the game
-on both, set `PhantomPact.ini`, and read `net_status.txt` on each. It should show `connected=yes` with a ping. If the
-host never connects, Windows Firewall is blocking the game on the host: allow `PBZ.exe` when Windows asks (private
-network). Protocol 3 hasn't had this test yet.
+**Two PCs:** there's no game-free relay test between PCs: the bots in `relay_cli` bind to loopback only. Run the game
+on both, press HOST and GUEST in F5, and read `net_status.txt` on each. It should show `connected=yes` with a ping.
+[STEAM_TEST.md](STEAM_TEST.md) has the steps. Protocol 3 hasn't had this test yet.
 
 ## 7. Online later (stretch)
 

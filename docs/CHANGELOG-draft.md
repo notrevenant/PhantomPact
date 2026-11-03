@@ -2,6 +2,16 @@
 
 Not posted. For the user to edit and post, on GitHub and Nexus.
 
+## Next version: Steam only, no ini
+
+- Phantom Pact now connects only through Steam: the guest joins a Steam friend who's hosting. No IP address, Tailscale,
+  VPN, port or firewall prompt. Both players must update, and must be Steam friends
+- No more PhantomPact.ini: everything is set in the F5 panel, which keeps your choices for the next start. An old ini
+  isn't read: pick your settings again in F5, and delete the file if you like
+- Gone with them: Tailscale, Other network, Paste address and the optional password. Steam already checks who's who and
+  encrypts the connection, and only friends can join
+- Co-op difficulty (150% health, 130% posture) and the PvP numbers are now the same fixed values on every PC
+
 ## To post
 
 - New connection, built into the game. Both players must update

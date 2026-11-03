@@ -32,9 +32,9 @@ every row has been rechecked. Protocol 3 hasn't run between two real PCs yet.
 
 ## Play with a friend
 
-Each player needs their own copy of PBZ, UE4SS + PBZCoop installed, and Tailscale (or any network where the client can
-reach the host's UDP port 47800). The steps are in [INSTALL.md](../INSTALL.md): set `Role` and `HostAddress` in
-`PhantomPact.ini`, start the game, load a save, or press F5 in the game for the online panel (`OnlinePanel = On`, the default) to host, join or leave with no restart.
+Each player needs their own copy of PBZ and UE4SS + PBZCoop installed, and the two must be Steam friends: the relay
+connects through Steam Networking only. The steps are in [INSTALL.md](../INSTALL.md): start the game, load a save, and press
+F5 for the online panel to host, join or leave with no restart. The panel keeps the choice for the next start.
 `autostart.lua` starts the relay in main.dll and turns sync on once you're in the world. There's nothing else to run.
 
 Link status: `ue4ss\Mods\PBZCoop\net_status.txt`, or the mod command `netstatus`. INSTALL.md explains what its numbers

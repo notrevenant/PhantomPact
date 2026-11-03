@@ -27,7 +27,7 @@ Open contribution, built by the community for the community. Let’s push it for
 [color=#ff2222][size=5][b]How It Works[/b][/size][/color]
 
 [list]
-[*]Press [b]F5[/b] in the game, pick [b]Steam[/b], [b]Tailscale[/b] or [b]Other network[/b], then press [b]HOST[/b] or [b]GUEST[/b]. No text file and no restart.
+[*]Be Steam friends. Press [b]F5[/b] in the game, then [b]HOST[/b] or [b]GUEST[/b]: the guest joins the friend who’s hosting. No text file, no IP address and no restart.
 [*]Each player loads [b]their own save[/b]. Joining takes you to the host once, even on another map.
 [*]A tip at the bottom of the screen says [b]“partner connected”[/b] when you’re linked. The compass at the top shows which way your partner is.
 [/list]
@@ -55,9 +55,8 @@ You should now have a [b]PBZCoop[/b] folder in [b]platform\steam\ue4ss\Mods[/b].
 
 [b]4. Connect[/b]
 Start the game and load your saves, the host first, then follow the F5 tutorial below.
-The first time you host, Windows asks whether the game may use the network: click [b]Allow[/b]. That window can open behind the game, so Alt+Tab if the guest can’t connect.
 
-[b]Updating:[/b] everyone extracts the new version over the old one, then presses HOST or GUEST in F5 again.
+[b]Updating:[/b] everyone extracts the new version over the old one, then presses HOST or GUEST in F5 again. An older version’s PhantomPact.ini isn’t used any more: you can delete it.
 [b]Playing alone:[/b] press [b]LEAVE[/b] in F5.
 [b]To uninstall:[/b] delete [b]platform\steam\ue4ss\Mods\PBZCoop[/b] from the game folder.
 
@@ -71,8 +70,7 @@ Press [b]F5[/b] once you’re in the world, on both PCs. The game doesn’t paus
 
 [list=1]
 [*][b]Language:[/b] [b]English[/b] or [b]中文[/b] at the top changes the panel and the co-op messages.
-[*][b]Connect Through:[/b] pick the same one on both PCs. [b]Steam[/b] needs no setup. For [b]Tailscale[/b] or [b]Other network[/b], the host sends their address to the guest, who copies it and presses [b]Paste address[/b].
-[*][b]Password (optional):[/b] copy the same password on both PCs and press [b]Paste password[/b] before you connect.
+[*][b]Connect Through:[/b] always [b]Steam[/b], with no setup. You must be Steam friends.
 [*][b]HOST:[/b] one player presses it, and [b]Status[/b] says it’s waiting for a partner.
 [*][b]GUEST:[/b] the other player presses it. Status shows who you’re connected to and your ping, and you’re taken to the host.
 [*][b]MORE:[/b] TP > PARTNER, PvP, the partner compass, your partner on the map, Steam Direct, 4 Players and Mode.
@@ -83,13 +81,12 @@ Press [b]Esc[/b], [b]F5[/b] or the [b]X[/b] to close the panel.
 
 [line]
 
-[color=#ff2222][size=5][b]Ways To Connect[/b][/size][/color]
+[color=#ff2222][size=5][b]How You Connect[/b][/size][/color]
 
 [list]
-[*][b]Steam:[/b] nothing to set up. You must be Steam friends, and the host must show as in the game, so not Invisible.
-[*][b]Tailscale:[/b] with [url=https://tailscale.com][color=#ff2222]Tailscale[/color][/url], everyone signs in to the same network. The guest copies the host’s address and presses [b]Paste address[/b]. This also covers Hamachi, Radmin and a home network.
-[*][b]Other network:[/b] for ZeroTier and UU Accelerator, with the host’s address pasted the same way.
-[*][b]Prefer a text file?[/b] Open platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini in Notepad. Host: [b]Role = Host[/b]. Guest: [b]Role = Guest[/b], and [b]HostAddress[/b] set to the host’s address.
+[*]Through [b]Steam[/b], with nothing to set up: no IP address, VPN or port to open. You must be Steam friends, and the host must show as in the game, so not Invisible.
+[*]Steam keeps your IP hidden behind Valve’s relays unless both of you turn [b]Steam Direct[/b] on under [b]MORE[/b], which is quicker but lets your partner’s PC see your IP.
+[*]There’s no settings file to edit: everything is in the F5 panel, and your choices are kept for the next start.
 [/list]
 
 [line]
@@ -127,7 +124,7 @@ This is a beta: four real players haven’t played this version together yet. Pl
 Split-screen local co-op is in the same download, with no internet or second PC needed. Each player uses a pad, or player 1 uses the keyboard and mouse and player 2 a pad. You share one save, backpack and dust.
 
 [b]1. Turn On Local Mode[/b]
-Press [b]F5 > MORE > Mode > LOCAL[/b] and restart the game. Or open platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini in Notepad and set [b]Role = Local[/b]. To go back, press [b]MULTIPLAYER[/b] in the F4 panel.
+Press [b]F5 > MORE > Mode > LOCAL[/b] and restart the game. To go back, press [b]MULTIPLAYER[/b] in the F4 panel.
 
 [b]2. Set Up Your Pads[/b]
 PlayStation pads need these steps, with one pad or two. Without them the game sends every pad to player 1.
@@ -174,7 +171,8 @@ Online co-op needs none of these pad steps. If your pads stop working in other g
 [color=#ff2222][size=5][b]Not Connecting?[/b][/size][/color]
 
 [list]
-[*]Did the host allow the game through Windows Firewall? That window can open behind the game
+[*]Are you Steam friends, is Steam running on both PCs, and is the host not Invisible in Steam?
+[*]Did the host press HOST and the guest GUEST? Two hosts never find each other
 [*]The guide in the zip, Phantom Pact - INSTALL.md, has a Connection problems section
 [*]Still stuck: post your [b]ue4ss\UE4SS.log[/b], [b]ue4ss\Mods\PBZCoop\net_status.txt[/b] and [b]ue4ss\Mods\PBZCoop\relay_log.txt[/b] in the Bugs tab
 [/list]
@@ -205,8 +203,7 @@ Online co-op needs none of these pad steps. If your pads stop working in other g
 [*]安装 [url=https://www.nexusmods.com/phantombladezero/mods/5][color=#ff2222]UE4SS for Phantom Blade Zero[/color][/url]:把 [b]dwmapi.dll[/b] 和 [b]ue4ss[/b] 文件夹放进 [b]platform\steam[/b],和 PBZ.exe 放在一起。不需要安装 Python。
 [*]把压缩包里的所有内容解压到游戏文件夹,也就是有 [b]platform[/b]、[b]ProjectPBZ[/b] 和 [b]steam[/b] 的那个文件夹,不是 PBZ.exe 所在的文件夹。提示合并文件夹时选择“是”。
 [*]确认 [b]platform\steam\ue4ss\Mods[/b] 里有 [b]PBZCoop[/b] 文件夹。
-[*]启动游戏并读取存档,房主先进,然后按下面的 F5 面板教程操作。
-[*]第一次开房时,Windows 会询问游戏能否使用网络,请点击[b]允许[/b]。这个窗口可能在游戏后面,连不上时按 Alt+Tab 查看。
+[*]启动游戏并读取存档,房主先进,然后按下面的 F5 面板教程操作。双方必须是 Steam 好友。
 [/list]
 
 [b]F5 面板教程[/b]
@@ -215,8 +212,7 @@ Online co-op needs none of these pad steps. If your pads stop working in other g
 
 [list=1]
 [*][b]语言:[/b]顶部的 English 和中文可以切换面板和联机提示的语言。
-[*][b]连接方式:[/b]两台电脑选择同一种。Steam 无需设置。使用 Tailscale 或其他网络时,房主把地址发给客人,客人复制后按[b]粘贴地址[/b]。UU 加速器和 ZeroTier 选其他网络。
-[*][b]密码(可不设):[/b]连接前,两台电脑复制同一个密码,然后按[b]粘贴密码[/b]。
+[*][b]连接方式:[/b]始终通过 Steam,无需设置,不用填 IP 地址,也不用虚拟局域网。双方必须是 Steam 好友。
 [*][b]开房:[/b]一方按下后,状态栏会显示正在等待队友。
 [*][b]加入:[/b]另一方按下后,状态栏会显示连接的对象和延迟,然后你会被传送到房主身边。
 [*][b]更多:[/b]传送到队友、PvP、队友指南针、地图上的队友、Steam 直连、4 人模式和模式。
@@ -234,7 +230,7 @@ Online co-op needs none of these pad steps. If your pads stop working in other g
 本地分屏也在同一个下载里,不需要网络,也不需要第二台电脑。可以每人一个手柄,也可以玩家 1 用键盘鼠标、玩家 2 用手柄。你们共用一个存档、背包和尘。
 
 [list=1]
-[*]打开本地模式:按 [b]F5 > 更多 > 模式 > 本地分屏[/b],然后重启游戏。也可以用记事本打开 platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini,设置 [b]Role = Local[/b]。要切换回去,在 F4 面板里按 [b]MULTIPLAYER[/b]。
+[*]打开本地模式:按 [b]F5 > 更多 > 模式 > 本地分屏[/b],然后重启游戏。要切换回去,在 F4 面板里按 [b]MULTIPLAYER[/b]。
 [*]使用 PlayStation 手柄时,无论一个还是两个,都要先做下面三步,否则游戏会把所有手柄都交给玩家 1。关闭 Steam 输入:在 Steam 中右键点击游戏 > 属性 > 控制器,选择[b]禁用 Steam 输入[/b]。
 [*]安装 [url=https://github.com/schmaldeo/DS4Windows/releases][color=#ff2222]DS4Windows[/color][/url]:连接手柄并让它保持运行。
 [*]安装 [url=https://github.com/nefarius/HidHide/releases][color=#ff2222]HidHide[/color][/url]:打开后在 [b]Applications[/b] 里添加 DS4Windows.exe,再到 [b]Devices[/b] 勾选你的手柄和 [b]Enable device hiding[/b]。然后确认 DS4Windows 的 [b]Ex[/b] 一列中每个手柄都有勾,没有的话请重新连接手柄。
@@ -245,7 +241,7 @@ Xbox 手柄应该不需要这些步骤,但我们还没有测试过。线上联�
 
 [b]没有连接上?[/b]
 
-确认房主已允许游戏通过 Windows 防火墙。更多内容见[url=https://github.com/yhsharaf/PhantomPact/blob/main/INSTALL.zh-CN.md][color=#ff2222]中文安装说明[/color][/url]。仍然不行,请在 Bugs 页面附上 ue4ss\UE4SS.log、ue4ss\Mods\PBZCoop\net_status.txt 和 ue4ss\Mods\PBZCoop\relay_log.txt。
+确认你们是 Steam 好友、双方的 Steam 都在运行、房主没有在 Steam 上隐身,并且房主按了“开房”、客人按了“加入”。更多内容见[url=https://github.com/yhsharaf/PhantomPact/blob/main/INSTALL.zh-CN.md][color=#ff2222]中文安装说明[/color][/url]。仍然不行,请在 Bugs 页面附上 ue4ss\UE4SS.log、ue4ss\Mods\PBZCoop\net_status.txt 和 ue4ss\Mods\PBZCoop\relay_log.txt。
 
 [center][i]Fan-made mod, not affiliated with or endorsed by S-GAME.[/i][/center]
 ```

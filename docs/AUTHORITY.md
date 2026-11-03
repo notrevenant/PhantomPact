@@ -6,7 +6,7 @@ The rule of thumb: **sync outcomes, not inputs and not every variable.** A hit i
 a kill as "this enemy died", never as raw animation state or per-frame values that the other game already
 simulates on its own.
 
-Host = the player whose world is shared (Role = Host). Client = the guest.
+Host = the player whose world is shared (HOST in the F5 panel). Client = the guest.
 
 ## The map
 
@@ -153,21 +153,13 @@ game process, so every read checks that the bytes are there, and a cut-off packe
 
 Raised by appdoze (issue #1 / PR #2) and reworked from their code:
 
-- **Sender filter.** The host relay only takes packets from addresses a partner can have: Tailscale, home networks,
-  this PC, and Hamachi/Radmin. `AllowAnyAddress = On` in the ini lifts the filter, for virtual LANs with other address
-  ranges (UU Accelerator's multiplayer, ZeroTier). A guest only listens to its host's exact address and port. A host
-  stays with its partner, and takes another sender only after 3 s of silence. Refused packets count as `filtered=` in
-  net_status.txt.
-- **Optional `Secret`**, the same on both PCs. Every packet is HMAC-signed with a scrypt-stretched key, and the
-  relay refuses a packet when:
-  - it is unsigned, or its signature is wrong;
-  - it comes from its own role or session (bounced back at its sender);
-  - it is more than two minutes old or ahead;
-  - its counter was already seen from that session, or is more than 64 behind the newest (a replay). A packet the
-    network merely reordered still counts.
-
-  Without a secret, signed packets are refused too, so a mismatch never half-works. Refused packets count as
-  `rejected=`. The relay reads the secret from the ini itself; it never appears on a command line.
+- **Who can connect.** The relay only talks through Steam Networking (`native/steam.cpp`). Steam says which SteamID
+  every message is from, authenticates it and encrypts the traffic. A session is accepted only from a Steam friend, so a
+  stranger's messages are dropped before the relay sees them. A guest only listens to its host's SteamID once it has
+  found it. A host stays with its partner, and takes another sender only after 3 s of silence.
+- **No packet signing.** Earlier versions had an optional `Secret` that HMAC-signed every packet, for virtual LANs where
+  anyone on the network could send to the port. Steam's own authentication does that job, so it was removed with the
+  connection by IP.
 - **Event values.** NaN and infinity are dropped. Dust and damage are capped per event, and the cap is checked
   before the lethal flag turns a hit into `math.huge`.
 - **One bad packet can't kill the relay.** Cut-off packets, event ids far ahead, odd timestamps, positions that aren't

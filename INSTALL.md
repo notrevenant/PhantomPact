@@ -11,49 +11,48 @@ guide.
 
 **Two players on one PC?** It's in this same download: in the game press F5, then MORE, set Mode to LOCAL and restart
 the game. Plug in two pads, and read `Phantom Pact - LOCAL CO-OP.md`, next to this guide, for player 2's controls and how to
-set up pads. It is in testing. (`Role = Local` in `PhantomPact.ini` does the same. F4 > MULTIPLAYER goes back, from the next
-start.)
+set up pads. It is in testing. (F4 > MULTIPLAYER goes back, from the next start.)
 
 ## What you need (both players)
 
 1. **Phantom Blade Zero** on Steam.
 2. **UE4SS for Phantom Blade Zero** by Vercadi (Nexus Mods), installed in `PBZ\platform\steam`.
-3. **Tailscale** (tailscale.com), both signed in to the same network.
+3. **Steam friends:** the host and the guest must be friends on Steam.
 
-You don't need Python: the connection runs inside the game (`PBZCoop\dlls\main.dll`). Its source is in the GitHub
-repository (`native/`).
+That's all. Phantom Pact connects through Steam Networking, inside the game (`PBZCoop\dlls\main.dll`, source in the
+GitHub repository's `native/`): no IP address to type, no VPN, no port to open and no Python.
 
-**Both players must use the same version.** 1.5.0 has a new connection, and 1.4.1 or older can't connect to it.
+**Both players must use the same version.**
 
 ## Install (both players)
 
 1. Open the game folder: Steam > right-click the game > Manage > Browse local files.
 2. Extract everything in the zip into that folder (the `PBZ` folder) and say yes to merging folders.
    The mod lands in `platform\steam\ue4ss\Mods\PBZCoop`.
-3. Open `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini` in Notepad:
-   - **Host:** change `Role = Off` to `Role = Host`
-   - **Guest:** change `Role = Off` to `Role = Guest`, and set `HostAddress` to the host's Tailscale IP (it starts
-     with 100.; the host sees it in the Tailscale app)
+3. Start the game and load your save.
+4. Press **F5** for the online panel. The host presses **HOST**, then the guest presses **GUEST**. The guest joins
+   whichever Steam friend is hosting Phantom Pact. Co-op starts by itself once you're both in the world.
 
-   Or skip this file and use the panel, below.
-4. Start the game and load your saves, the host first. Co-op starts by itself once you're in the world.
-   The first time you host, Windows asks whether the game may use the network: click **Allow**. That window can open
-   behind the game, so Alt+Tab if the guest can't connect.
+There's no file to edit: everything is set in the panel. Your choices are kept for the next start (the mod saves them in
+`settings.txt` in the mod folder), so after the first time co-op starts again by itself as Host or Guest. **LEAVE**
+goes back to playing alone, and stays that way next time.
 
 The UE4SS console shows `Phantom Pact Host: co-op on` (or Guest), and
 `ue4ss\Mods\PBZCoop\net_status.txt` shows `connected=yes` once you're linked.
 
-**Easiest: the panel.** In the game, press **F5** to open the online panel, with no text file and no restart. Pick
-Steam (nothing to set up: it finds your friend who's hosting), Tailscale, or Other Network, then press Host or Guest.
-For Tailscale and other networks, copy the host's address and press Paste. Tailscale also covers Hamachi, Radmin and
-a home network; Other Network is for ZeroTier and UU Accelerator. If you want a password, copy it and press Paste
-password on both PCs before you connect. English and 中文 at the top of the panel switch the language of the panel
-and the co-op messages. Your choices are kept for the next start.
+**The panel.** English and 中文 at the top switch the language of the panel and the co-op messages. The status box says
+what's going on: waiting for a partner, looking for a friend who's hosting, or connected with the ping and whether Steam
+connects you directly or through its relays.
 
 **MORE** opens the settings: TP > PARTNER, PvP, the partner compass, your partner on the map, Steam Direct and 4 PLAYERS
 (Beta), each ON or OFF, and Mode: MULTIPLAYER, or LOCAL for two players on this PC. Mode works from the next time you start the
 game. Revive is coming soon. Enemy difficulty is the game's own setting. With a partner, enemies always get extra health and
 posture on top of it.
+
+**Steam Direct.** OFF (the default) leaves it to Steam's own setting (Steam > Settings > In Game > Steam Networking), which
+normally means Valve's relays: your IP stays hidden, with a little more delay. ON tries for a direct connection, the
+quickest, and your partner's PC can then see your IP address. A direct connection needs ON on both PCs, and works from the
+next connection.
 
 **Going to your partner.** Joining takes you to the host once, even on another map, so a friend with a new save can
 join a host further into the story. Your save stays where you land, so your own story can get ahead of where you were.
@@ -65,8 +64,8 @@ partner are down.
 
 4 PLAYERS under MORE is off by default, and with it off nothing changes. Turn it on before you press Host, and up to three
 guests can join: four players in all. Only the host's switch counts: guests follow it, whatever theirs says. It works from the
-next Host (`FourPlayers = On` in the ini does the same). Everyone joins as they would with two players, and everyone needs the
-same version. It hasn't been played by four people yet: tell us what breaks.
+next Host. Everyone joins as they would with two players, must be Steam friends with the host, and needs the same version.
+It hasn't been played by four people yet: tell us what breaks.
 
 With more than two players:
 
@@ -82,41 +81,25 @@ With more than two players:
 - PvP and Revive stay off.
 - The host sends about 50-100 KB/s with three guests, so a slow upload will show.
 
-- **Updating:** both players update. Extract the new version over the old one, then set `Role` / `HostAddress` again.
-  What an older version left in the `PBZCoop` folder (the `relay` folder, and `net_in.txt`, `net_out.txt` and the
-  `net_events` files) isn't used any more; you can delete it.
-- **Playing alone:** set `Role = Off`.
+- **Updating:** both players update. Extract the new version over the old one. An older version's `PhantomPact.ini` isn't
+  read any more, so pick your settings again in the F5 panel; you can delete that file. What even older versions left in
+  the `PBZCoop` folder (the `relay` folder, and `net_in.txt`, `net_out.txt` and the `net_events` files) isn't used either.
+- **Playing alone:** press LEAVE in the F5 panel.
 - **Uninstalling:** delete the `platform\steam\ue4ss\Mods\PBZCoop` folder.
-
-## Other ways to connect
-
-- **Hamachi, Radmin, ZeroTier, UU Accelerator's multiplayer:** any virtual LAN works. The guest puts the host's
-  address from that app in `HostAddress` (leave `Connect = Tailscale`: it just means "connect by IP"). If the app
-  hands out unusual addresses (UU, ZeroTier), the host also sets `AllowAnyAddress = On`.
-- **Steam:** both set `Connect = Steam`; the guest joins a Steam friend who's hosting. No Tailscale needed. You must be
-  Steam friends, and the host must show as in the game, so not Invisible. The guest leaves `HostAddress` empty or puts the
-  host's Steam name, or their SteamID64 (17 digits) if they're Invisible; an IP address there is ignored.
-  `SteamDirect = Off` (the default) leaves it to Steam's own setting, which normally means Valve's relays: your IP stays
-  hidden, with more delay. `On` tries for a direct connection, the quickest, and your partner's PC can then see your IP
-  address. A direct connection needs `On` on both PCs.
-- **Secret (optional):** the same password in `Secret =` on both PCs, or Paste password in the panel, signs every
-  packet, so nobody else on the network can join. Recommended with `AllowAnyAddress = On`.
 
 ## On screen
 
-- **Partner compass:** a silver seal on a line at the top shows which way your partner is. Turn it off with
-  `PartnerCompass = Off`.
+- **Partner compass:** a silver seal on a line at the top shows which way your partner is. Turn it off under MORE.
 - **Map:** your partner is a jade copy of your own map marker, turned the way they face, when you're in the same
-  area (red while they're down). Turn it off with `PartnerMapIcon = Off`.
+  area (red while they're down). Turn it off under MORE.
 - **Tips:** short messages when your partner connects, drops, goes down or wanders far off, and when something is in
-  the way: no answer from the host, a refused `Secret`, different versions or settings, a high ping.
+  the way: no friend hosting found, different versions or settings, a high ping, Steam relaying the connection.
 - **When you die:** after a few seconds the camera follows your partner until you respawn.
 
 ## Co-op difficulty
 
-Like Elden Ring, enemies and bosses get tougher while your partner is with you: 150% health and 130% posture by
-default. Change `CoopEnemyHealth` / `CoopEnemyPosture` in `PhantomPact.ini` (percent; 100 = normal). Both
-players should use the same numbers.
+Like Elden Ring, enemies and bosses get tougher while your partner is with you: 150% health and 130% posture, the same
+on every PC.
 
 With 4 PLAYERS (Beta) on, each person connected adds the same again, wherever they are, on another map, loading or down: 200%
 and 160% with two connected, 250% and 190% with three. It only goes up, so a boss doesn't lose health when someone dies or
@@ -125,17 +108,16 @@ enemies rise at once.
 
 ## PvP (duels)
 
-Both players set `PvP = On` in `PhantomPact.ini`. Your partner becomes an opponent you can fight:
+Both players turn PvP ON under MORE in the F5 panel. Your partner becomes an opponent you can fight:
 
 - Their attacks hit you through the game's own combat: **block** (hold the guard button) costs posture,
   a well-timed **parry** (tap guard just before the hit) costs nothing, and dodges work as usual.
-- A parry is rewarded like against a boss: the attacker staggers and loses posture (`PvPParryPosture`, default 60).
+- A parry is rewarded like against a boss: the attacker staggers and loses 60 posture.
 - The loser dies for real and respawns at their bell, as after any death. A kill by your partner is scored
   in the UE4SS console (`PvP: VICTORY. Your blade was faster. The pact holds. Score 1 - 0.`); dying to an
   enemy doesn't count.
   (In the prologue area the game won't let you die, so duel there for fun and the score still counts.)
 - Both players fight with the same strength (your partner's ghost uses your stats), so skill decides.
-  `PvPDamage` scales the damage you take (100 = normal).
 
 Not in PvP yet: executions (posture break only staggers).
 
@@ -157,12 +139,12 @@ Not in PvP yet: executions (posture break only staggers).
 
 ## Troubleshooting
 
-- **No "co-op on" line:** check `PhantomPact.ini` (Role, and HostAddress for the guest). The UE4SS log says what's
+- **No "co-op on" line:** press F5 and check that the host pressed HOST and the guest GUEST. The UE4SS log says what's
   missing.
 - **"dlls\main.dll isn't running":** your antivirus may have removed it. Extract the zip again and allow the file,
   then restart the game. Online co-op can't run without it.
 - **`relay_error.txt` in the mod folder, or the tip "co-op couldn't start":** the connection couldn't start, and the
-  message says why (for example, the port is in use). Post it with your bug report.
+  message says why (for example, Steam isn't running or isn't logged in). Post it with your bug report.
 - **`connected=no`, or it feels laggy:** see Connection problems below.
 - **No `[PBZCoop] Loaded` line at all:** UE4SS isn't installed in `PBZ\platform\steam`, or the mod folder isn't at
   `platform\steam\ue4ss\Mods\PBZCoop`.
@@ -175,49 +157,36 @@ and open it again to see new numbers. The parts that help:
 | Part | What it tells you |
 |---|---|
 | `connected` | `yes` if your partner was heard in the last 3 seconds |
-| `peer` | Your partner's address. On the host, `-` means nothing has arrived from the guest yet |
-| `via` | How you connect: `udp` (by IP, over Tailscale or another virtual LAN) or `steam` |
-| `route` | Steam only: `direct`, or `relay` through Valve's servers. `-` over IP: see Direct or relayed below |
+| `peer` | Your partner's Steam name. On the host, `-` means nothing has arrived from the guest yet |
+| `via` | Always `steam` |
+| `route` | `direct`, or `relay` through Valve's servers |
 | `rtt_ms` | Ping, there and back, in ms. The game warns you if it stays above 250 |
-| `route_ping_ms` | Steam only: Steam's own ping for that route |
-| `link_problem` | Steam only: Steam's reason the last try ended, its number and its words, `-` if none |
+| `route_ping_ms` | Steam's own ping for that route |
+| `link_problem` | Steam's reason the last try ended, its number and its words, `-` if none |
 | `jitter_ms` | How late packets arrive compared with the fastest lately, in ms. High jitter with a low ping usually means Wi-Fi |
 | `delay_ms` | How far in the past your partner is shown so they move smoothly, in ms. It follows jitter, up to about 220 |
 | `loss_pct` | Packets lost in the last second, in percent |
 | `partner_version` | Your partner's version. `1.4.1-or-older` or `other-protocol` means one of you must update |
 | `mismatch` | Settings that differ between you (`-` = none) |
-| `filtered` | Packets refused because of their address. Going up on the host: see `AllowAnyAddress` above |
-| `rejected` | Packets refused by `Secret`. Going up: the two `Secret` values differ, or the PCs' clocks are more than 2 minutes apart |
+| `refused` | Sends Steam turned down. Going up while `connected=no`: Steam couldn't reach your partner |
 | `stopped` | `yes` when the connection isn't running: you pressed Leave, or it failed and `error` says why |
 
-For scale: the test bench stayed smooth at 100 ms ping, 20 ms jitter and 2% loss. That was two copies on one PC with a
-simulated bad connection, not a real one.
+For scale: the test bench stayed smooth at 100 ms ping, 20 ms jitter and 2% loss. That was a simulated bad connection on
+one PC, not a real one.
 
 **`connected=no`.** Go through these in order:
 
-1. Both on Tailscale, in the same network? The host's IP in the guest's `HostAddress`?
-2. The guest runs `tailscale ping 100.x.y.z` in PowerShell, with the host's IP. No reply means Tailscale itself isn't
-   connecting the two PCs: fix that first.
-3. A reply, but still `connected=no`: Windows Firewall on the host is the likely cause, because `tailscale ping`
-   doesn't pass through it. See below.
+1. Are you friends on Steam? Both of you need Steam running and logged in.
+2. Did the host press HOST, and the guest GUEST? Two Hosts, or two Guests, never find each other.
+3. Is the host Invisible in Steam? The guest only finds a friend who shows as playing the game: the host sets their
+   status to Online.
+4. The same Phantom Pact version on both PCs?
+5. The tip "Steam couldn't connect" gives Steam's own reason (also `link_problem` in `net_status.txt`): post it with your
+   bug report.
 
-**Windows Firewall.** The connection is part of the game, so the firewall asks about the game (`PBZ.exe`), not Python.
-It asks the first time the game opens the port, so on the host's PC, and the window can open behind the game. Click
-Allow, with Private networks ticked (Tailscale counts as private; if your virtual LAN shows as Public in Windows, tick
-that too). If you clicked Cancel, open Windows Security > Firewall & network protection > Allow an app through
-firewall > Change settings, and tick PBZ. If it isn't in the list, use Allow another app and pick
-`platform\steam\PBZ.exe` in the game folder.
-
-**Direct or relayed.** Over Steam, `route` shows it: if it stays `relay`, check `SteamDirect = On` on both PCs, and that
-your routers allow a direct connection. Over Tailscale `route` stays `-`, so ask `tailscale ping 100.x.y.z`:
-
-- `pong from ... via 203.0.113.5:41641 in 12ms`: direct, the best case. The command stops by itself once it gets one.
-- `pong from ... via DERP(fra) in 80ms`: relayed through a Tailscale server. The first few replies are often like this
-  while Tailscale looks for a direct path.
-- It ends with `direct connection not established`: you stay relayed, which means a higher ping and more jitter. Turn
-  off other VPNs on both PCs, and turn on UPnP on the router, or forward UDP port 41641 (Tailscale's own, not the
-  game's) to one of the PCs. A phone hotspot or a provider that shares one address between customers can stop a direct
-  path from ever working. If nothing helps, try another virtual LAN.
+**Direct or relayed.** `route` shows it. If it stays `relay`, turn Steam Direct ON under MORE on both PCs, and check that
+your routers allow a direct connection (UPnP on). A phone hotspot or a provider that shares one address between customers
+can stop a direct path from ever working; the relays still work, with more delay.
 
 **Wi-Fi or cable.** Wi-Fi is the usual cause of jitter, loss and short freezes. If `jitter_ms` jumps around or
 `loss_pct` isn't 0, plug in a cable, on both PCs if you can, and compare. Stop big downloads and streams on the same
@@ -230,8 +199,6 @@ start over:
 
 - `ue4ss\UE4SS.log`
 - `ue4ss\Mods\PBZCoop\net_status.txt` and `relay_log.txt`, plus `relay_error.txt` if it's there
-- What `tailscale ping` prints, if you use Tailscale
 - Host or guest, which area or boss, what happened, and Wi-Fi or cable
 
-`net_status.txt` and `relay_log.txt` show your partner's address. Your `Secret` is only in `PhantomPact.ini`: don't post
-that file with the `Secret` in it.
+`net_status.txt` and `relay_log.txt` show your partner's Steam name.

@@ -1,7 +1,7 @@
 # Revive (Nightreign's rules, Phantom Blade's look)
 
-Agreed with the project owner on 2026-10-30, from appdoze's design (issue #8) and research into Nightreign. `Revive = Off`
-in `PhantomPact.ini` by default until two real PCs have tested it. Nothing here writes to a save.
+Agreed with the project owner on 2026-10-30, from appdoze's design (issue #8) and research into Nightreign. Revive is off
+by default (the `revive on` command turns it on, on both PCs) until two real PCs have tested it. Nothing here writes to a save.
 
 ## The gauge
 

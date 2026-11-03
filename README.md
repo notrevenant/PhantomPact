@@ -23,11 +23,12 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 - Shared loot and dust: what either player picks up or earns goes to both
 - Shared resting: sit at a bell and your partner is rested too, and comes to you if they're dead, down or watching a fight
 - Elden Ring–style co-op difficulty: enemies and bosses get more health and posture while you play together
-- PvP duels (`PvP = On`): the game's own block, parry and dodge; parries stagger the attacker; the loser dies
+- PvP duels (PvP under MORE in the F5 panel): the game's own block, parry and dodge; parries stagger the attacker; the loser dies
 - A partner compass in the game's ink style, your partner on the map in jade, partner tips, and spectating your
   partner while you're down
-- Optional `Secret` that signs every packet; works over Tailscale, Hamachi, Radmin, ZeroTier, UU Accelerator, and
-  Steam (beta)
+- Connects through Steam Networking: the guest joins a Steam friend who's hosting, with no IP address, VPN or port to
+  set up. Steam authenticates and encrypts the connection, and only friends get in
+- Everything is set in the game's F5 panel: no settings file to edit
 - Local co-op (F5 > MORE > Mode > LOCAL, in testing): two players on one PC in split screen, one pad each or keyboard plus
   pad, with player 2 climbing, opening chests, ringing bells, drinking from the gourd and fighting on their own
   ([docs/LOCAL_COOP.md](docs/LOCAL_COOP.md))
@@ -36,20 +37,18 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 
 ## Quick start
 
-1. Install [UE4SS for Phantom Blade Zero](https://www.nexusmods.com/phantombladezero/mods/5) and [Tailscale](https://tailscale.com) (both players).
+1. Install [UE4SS for Phantom Blade Zero](https://www.nexusmods.com/phantombladezero/mods/5) (both players). Be Steam friends.
 2. Extract the release zip into the game's `PBZ` folder.
-3. In `platform\steam\ue4ss\Mods\PBZCoop\PhantomPact.ini`: host sets `Role = Host`, guest sets `Role = Guest` and
-   `HostAddress` to the host's Tailscale IP.
-4. Start the game and load your saves, the host first. Co-op starts by itself. Or press F5 in the game for the online panel: Host or Guest with no text file.
+3. Start the game, load your save and press **F5**: the host presses HOST, then the guest presses GUEST. The guest joins
+   the Steam friend who's hosting, and co-op starts by itself. Your choice is kept for the next start.
 
-Early release, 2 players (4 in beta). Tailscale or any virtual LAN; Steam joining is in beta (see INSTALL.md).
+Early release, 2 players (4 in beta).
 
-Both players must use the same version: 1.5.0 has a new connection, and 1.4.1 or older can't connect to it. No Python
-needed: the connection runs inside the game. Can't connect, or it feels laggy? See Connection problems in
-[INSTALL.md](INSTALL.md#connection-problems).
+Both players must use the same version. No Python, VPN or port forwarding needed: the connection runs inside the game,
+through Steam. Can't connect, or it feels laggy? See Connection problems in [INSTALL.md](INSTALL.md#connection-problems).
 
 For two players on one PC, it's in the same download: press F5 in the game, then MORE > Mode > LOCAL, restart the game and
-plug in two pads (`Role = Local` in the ini does the same): see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
+plug in two pads: see [docs/LOCAL_COOP.md](docs/LOCAL_COOP.md).
 
 ## Ground rules
 
@@ -62,12 +61,12 @@ plug in two pads (`Role = Local` in the ini does the same): see [docs/LOCAL_COOP
 
 | Path | What it is |
 |---|---|
-| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `localcoop.lua` (split screen: player 2's controls, interactions, enemies), `panel.lua` (local co-op F4 panel), `onlinepanel.lua` (online F4 panel: host, join, leave), `autostart.lua` (reads `PhantomPact.ini`, starts the relay, turns sync on), `main.lua` (loader, commands) |
-| [native/](native/) | The relay: C++, loaded by UE4SS as `dlls\main.dll` inside the game. Build with `tools\build-native.ps1` (Visual Studio 2022). `native\build\relay_cli.exe test` runs its tests; `relay_cli.exe` is never shipped |
+| [mod/PBZCoop/](mod/PBZCoop/) | UE4SS Lua mod: `coop.lua` (online sync), `pbz.lua` (game adapter: enemies, health, moves, bosses, items), `localcoop.lua` (split screen: player 2's controls, interactions, enemies), `panel.lua` (local co-op F4 panel), `onlinepanel.lua` (online F5 panel: host, join, leave, settings), `settings.lua` (what the panels keep in `settings.txt`), `autostart.lua` (reads those settings, starts the relay, turns sync on), `main.lua` (loader, commands) |
+| [native/](native/) | The relay: C++, loaded by UE4SS as `dlls\main.dll` inside the game, connecting through Steam Networking (`steam.cpp`). Build with `tools\build-native.ps1` (Visual Studio 2022). `native\build\relay_cli.exe test` runs its tests over a loopback link of its own; `relay_cli.exe` is never shipped |
 | [tools/netlab/](tools/netlab/) | Online co-op test bench: relay tests through a bad connection, and real game copies from a separate install ([README](tools/netlab/README.md)) |
 | [tools/install-mod.ps1](tools/install-mod.ps1) | Installs the mod into the game's UE4SS `Mods` folder (finds the game through Steam) |
-| [tools/pbz-e2e.ps1](tools/pbz-e2e.ps1) | End-to-end test: two copies of the game on one PC, PASS/FAIL per feature. Each copy's ini starts its relay, as for players |
-| [tools/pbz-selftest.ps1](tools/pbz-selftest.ps1) | Starts two copies with `-allowmultipleinstances`, each with an ini for its role; `-Connect Udp\|Steam`, `-Cuttable`, `-Stop` |
+| [tools/pbz-e2e.ps1](tools/pbz-e2e.ps1) | End-to-end test, PASS/FAIL per feature. Each copy's settings.txt starts its relay, as for players. Connecting needs two PCs with two Steam accounts |
+| [tools/pbz-selftest.ps1](tools/pbz-selftest.ps1) | Starts two copies with `-allowmultipleinstances`, each with a settings.txt for its role; `-Stop` |
 | [tools/make-release.ps1](tools/make-release.ps1) | Builds `dist\PhantomPact-<version>.zip` |
 | [docs/NETCODE.md](docs/NETCODE.md) | How online co-op works now: protocol 3, packets, the sure and quick lanes, measurements, testing |
 | [docs/AUTHORITY.md](docs/AUTHORITY.md) | Which PC decides what, how duplicates are prevented, who may talk to the relay |
