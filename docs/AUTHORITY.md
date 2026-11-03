@@ -157,6 +157,9 @@ Raised by appdoze (issue #1 / PR #2) and reworked from their code:
   every message is from, authenticates it and encrypts the traffic. A session is accepted only from a Steam friend, so a
   stranger's messages are dropped before the relay sees them. A guest only listens to its host's SteamID once it has
   found it. A host stays with its partner, and takes another sender only after 3 s of silence.
+- **Join Game and invites** (`native/steam_social.hpp`). While hosting, the relay sets this player's Steam rich presence
+  `connect` key to `+pp_join <SteamID64>`, which only Steam friends can see, and clears it when the relay stops. A join
+  request from Steam names a host, and the guest then tries only that SteamID: the host still accepts only friends.
 - **No packet signing.** Earlier versions had an optional `Secret` that HMAC-signed every packet, for virtual LANs where
   anyone on the network could send to the port. Steam's own authentication does that job, so it was removed with the
   connection by IP.

@@ -11,6 +11,9 @@ Not posted. For the user to edit and post, on GitHub and Nexus.
 - Gone with them: Tailscale, Other network, Paste address and the optional password. Steam already checks who's who and
   encrypts the connection, and only friends can join
 - Co-op difficulty (150% health, 130% posture) and the PvP numbers are now the same fixed values on every PC
+- Join from Steam: while you host, friends see Join Game on you in their Steam friends list, and you can send Invite to
+  Game. Accepting takes them straight to you
+- Several friends hosting? Click the Steam card in F5 to pick which one GUEST joins
 
 ## To post
 

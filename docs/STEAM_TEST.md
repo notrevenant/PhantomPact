@@ -20,6 +20,16 @@ This needs two people, or one person with two PCs, each signed into their own St
 3. Within a few seconds each player should see the other's character. From then on both start that way by themselves
    (the panel keeps the choice in `settings.txt`).
 
+Then try the Steam side, which also needs two real accounts:
+
+4. Both press LEAVE. The host presses HOST again. In the guest's Steam friends list, the host should show **Join Game**:
+   click it. The guest's game should switch to guest and log `Steam asked to join <host> (<id>)`.
+5. Both press LEAVE, the host presses HOST, and invites the guest from Steam's friends list (Invite to Game). Accepting
+   should do the same.
+6. With the guest's game closed, click Join Game: Steam starts the game. Note whether it joins by itself (the launcher
+   passed `+pp_join` on) or needs GUEST.
+7. In F5, the guest clicks the Steam card: it should name the host.
+
 ## What to look for
 
 In `platform\steam\ue4ss\UE4SS.log`, both players:

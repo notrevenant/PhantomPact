@@ -29,6 +29,8 @@ share loot and dust, and rest at bells together. The host's world leads, and you
 - Connects through Steam Networking: the guest joins a Steam friend who's hosting, with no IP address, VPN or port to
   set up. Steam authenticates and encrypts the connection, and only friends get in
 - Everything is set in the game's F5 panel: no settings file to edit
+- Join from Steam: while you host, friends see **Join Game** on you in Steam and you can send **Invite to Game**. The F5
+  panel's Steam card picks which hosting friend to join
 - Local co-op (F5 > MORE > Mode > LOCAL, in testing): two players on one PC in split screen, one pad each or keyboard plus
   pad, with player 2 climbing, opening chests, ringing bells, drinking from the gourd and fighting on their own
   ([docs/LOCAL_COOP.md](docs/LOCAL_COOP.md))

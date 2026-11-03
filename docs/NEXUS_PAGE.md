@@ -86,6 +86,8 @@ Press [b]Esc[/b], [b]F5[/b] or the [b]X[/b] to close the panel.
 [list]
 [*]Through [b]Steam[/b], with nothing to set up: no IP address, VPN or port to open. You must be Steam friends, and the host must show as in the game, so not Invisible.
 [*]Steam keeps your IP hidden behind Valve’s relays unless both of you turn [b]Steam Direct[/b] on under [b]MORE[/b], which is quicker but lets your partner’s PC see your IP.
+[*]While you host, friends see [b]Join Game[/b] on you in Steam, and you can send them [b]Invite to Game[/b]. Accepting takes them straight to you.
+[*]Several friends hosting? Click the [b]Steam[/b] card in F5 to pick which one GUEST joins.
 [*]There’s no settings file to edit: everything is in the F5 panel, and your choices are kept for the next start.
 [/list]
 
@@ -212,7 +214,7 @@ Online co-op needs none of these pad steps. If your pads stop working in other g
 
 [list=1]
 [*][b]语言:[/b]顶部的 English 和中文可以切换面板和联机提示的语言。
-[*][b]连接方式:[/b]始终通过 Steam,无需设置,不用填 IP 地址,也不用虚拟局域网。双方必须是 Steam 好友。
+[*][b]连接方式:[/b]始终通过 Steam,无需设置,不用填 IP 地址,也不用虚拟局域网。双方必须是 Steam 好友。点 Steam 卡片可以选择要加入哪位开房的好友。开房时,好友也可以在 Steam 好友列表里点“加入游戏”,或接受你的“邀请加入游戏”。
 [*][b]开房:[/b]一方按下后,状态栏会显示正在等待队友。
 [*][b]加入:[/b]另一方按下后,状态栏会显示连接的对象和延迟,然后你会被传送到房主身边。
 [*][b]更多:[/b]传送到队友、PvP、队友指南针、地图上的队友、Steam 直连、4 人模式和模式。

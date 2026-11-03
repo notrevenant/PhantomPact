@@ -33,6 +33,16 @@ GitHub repository's `native/`): no IP address to type, no VPN, no port to open a
 4. Press **F5** for the online panel. The host presses **HOST**, then the guest presses **GUEST**. The guest joins
    whichever Steam friend is hosting Phantom Pact. Co-op starts by itself once you're both in the world.
 
+**Picking a friend, invites and Join Game.**
+
+- **Pick who to join:** before pressing GUEST, click the **Steam** card. Each click goes to the next friend who's hosting,
+  then back to any friend; the status box says who. GUEST then joins only that friend.
+- **From Steam's friends list:** while you host, your friends see **Join Game** on you in Steam, and you can right-click a
+  friend and use **Invite to Game**. When a friend clicks Join Game, or accepts your invite, their game switches to guest
+  and joins you, even if they were hosting or alone.
+- If their game isn't running yet, Steam starts it. Whether it then joins by itself depends on the game's launcher passing
+  Steam's request on; if it doesn't, they press GUEST once in.
+
 There's no file to edit: everything is set in the panel. Your choices are kept for the next start (the mod saves them in
 `settings.txt` in the mod folder), so after the first time co-op starts again by itself as Host or Guest. **LEAVE**
 goes back to playing alone, and stays that way next time.
@@ -179,7 +189,7 @@ one PC, not a real one.
 1. Are you friends on Steam? Both of you need Steam running and logged in.
 2. Did the host press HOST, and the guest GUEST? Two Hosts, or two Guests, never find each other.
 3. Is the host Invisible in Steam? The guest only finds a friend who shows as playing the game: the host sets their
-   status to Online.
+   status to Online. Several friends hosting at once? Click the Steam card in F5 to pick one.
 4. The same Phantom Pact version on both PCs?
 5. The tip "Steam couldn't connect" gives Steam's own reason (also `link_problem` in `net_status.txt`): post it with your
    bug report.
