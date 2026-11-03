@@ -413,7 +413,7 @@ function Fake.new(id, scripts, ini, link)
         nextAddress = 0x100000, calls = 0, keys = {}, enemies = {}, spawners = {}, spawned = {}, hitComps = {}, factions = {}, pickups = {}, chests = {}, link = link, map = "Map_Xigu",
         paused = false }
     pc.meta = makeMeta(pc)
-    -- The same lines as settings.txt (what the panels save now) and PhantomPact.ini (what scripts before 1.6 read), so
+    -- The same lines as settings.txt (what the panels save now) and PhantomPact.ini (what older scripts read), so
     -- two.lua can run old scripts against new ones.
     pc.files["settings.txt"] = ini
     pc.files["PhantomPact.ini"] = ini

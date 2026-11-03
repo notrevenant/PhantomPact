@@ -29,7 +29,7 @@ end
 local function story(scripts, extraIni)
     local s = Session.new(scripts, { "Host", "Guest" }, false, ENEMIES, extraIni)
     local host, guest = s.pcs[1], s.pcs[2]
-    -- Revive isn't a setting since 1.6: the command turns it on, on scripts old and new alike.
+    -- Revive is no longer a setting: the command turns it on, on scripts old and new alike.
     if (extraIni or ""):find("Revive = On", 1, true) then
         Session.command(host, "revive on")
         Session.command(guest, "revive on")
@@ -192,10 +192,9 @@ local function chinese(out, oldScripts, newScripts)
     end
     local old, new = language(oldScripts), language(newScripts)
     local lines = { "your partner is 150 m away.", "your partner is 150 m away. F3 takes you there.", "your partner is on another map.",
-        "your partner is on another map. F3 takes you there.", "Connected to 10.0.0.1. Ping 40 ms. Route: direct.",
-        "Connected to 10.0.0.1. Ping 40 ms. Route: relay.", "partner connected (ping 30 ms).", "partner connected (ping 30 ms), signed.",
-        "partner connected.", "high ping (300 ms).", "high ping (300 ms). On Tailscale, run \"tailscale ping\": via DERP means relayed.",
-        "Looking for 10.0.0.1...", "Host address set to 10.0.0.1.", "Couldn't start: nope", "co-op couldn't start: nope",
+        "your partner is on another map. F3 takes you there.", "Connected to Friend. Ping 40 ms. Route: direct.",
+        "Connected to Friend. Ping 40 ms. Route: relay.", "partner connected (ping 30 ms).",
+        "partner connected.", "high ping (300 ms).", "Looking for a Steam friend who's hosting...", "Couldn't start: nope", "co-op couldn't start: nope",
         "settings differ from your partner's: pvp, revive", "your partner is on Phantom Pact 1.4.1 and you're on 1.4.2: use the same version, or enemies won't stay in step.",
         "your partner's Phantom Pact (1.4.1-or-older) can't connect to 1.5.1: both PCs need the same version." }
     for _, name in ipairs({ "autostart", "coop", "hud", "lang", "main", "mapicon", "moves", "onlinepanel", "panel", "partner", "pbz", "puppets", "pvp", "revive", "scaling", "status" }) do
